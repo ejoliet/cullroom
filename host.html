@@ -284,6 +284,10 @@ const THUMB_MAX_DIM    = 320;
 const PREVIEW_MAX_DIM  = 1600;
 const THUMB_BATCH_SIZE = 20;   // AIDEV-NOTE: chunking — thumbnails sent in batches to avoid DataChannel overflow
 const THUMB_BATCH_MS   = 15;   // yield interval between batches (ms)
+// AIDEV-NOTE: chunking — yield every YIELD_INTERVAL photos during thumbnail generation
+// to release the main thread and keep the UI responsive. Lower values increase
+// responsiveness at the cost of slightly longer total import time.
+const YIELD_INTERVAL   = 10;
 const MAX_CLIENTS      = 3;
 const RECONNECT_MS     = 3000;
 
@@ -309,6 +313,15 @@ let lbFullLoaded= new Set(); // ids for which full preview is loaded in the ligh
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const isJpeg = f => /\.(jpe?g)$/i.test(f.name) || f.type === 'image/jpeg';
 const $ = id => document.getElementById(id);
+
+// AIDEV-NOTE: XSS guard — always escape user-controlled strings before
+// inserting into innerHTML. Filenames from File objects are user-controlled.
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function showToast(msg, dur = 2500) {
   const t = $('toast');
@@ -458,7 +471,7 @@ async function importFiles(files) {
     }
     newPhotos.push({ id, filename: file.name, file, thumbDataUrl, locked: i >= limit });
     setProgress(Math.round(((i + 1) / jpegs.length) * 100));
-    if (i % 10 === 9) await delay(0); // yield to keep UI responsive
+    if (i % YIELD_INTERVAL === YIELD_INTERVAL - 1) await delay(0); // yield to keep UI responsive
   }
 
   photos = newPhotos;
@@ -534,7 +547,10 @@ async function traverseDirectory(entry, files) {
 // PeerJS cloud server (0.peerjs.com). For internet sessions behind symmetric NAT
 // a self-hosted PeerJS server + TURN relay is recommended.
 function generateRoomCode() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase();
+  // Use crypto.getRandomValues() for sufficient entropy and collision resistance
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('').slice(0, 6).toUpperCase();
 }
 
 function initPeer(code) {
@@ -682,11 +698,15 @@ async function servePreview(conn, id) {
 
 // ── Mark management ────────────────────────────────────────────────────────────
 // AIDEV-NOTE: state sync — last-write-wins conflict resolution.
-// Each mark carries a Unix-ms timestamp. If the incoming ts <= existing ts,
-// the update is silently dropped. Null mark removes the entry.
+// Each mark carries a Unix-ms timestamp. If the incoming ts < existing ts,
+// the update is dropped. On equal ts, host role takes priority (tie-breaker).
+// Null mark removes the entry.
 function applyMark(id, mark, role, ts) {
   const cur = marks[id];
-  if (cur && cur.ts > ts) return;
+  if (cur) {
+    if (cur.ts > ts) return;                          // strictly older — drop
+    if (cur.ts === ts && cur.role === 'host' && role === 'client') return; // tie: host wins
+  }
 
   if (mark === null || mark === undefined) {
     delete marks[id];
@@ -725,12 +745,13 @@ function cellHTML(p, idx) {
   const mc  = m ? m.mark : '';
   const rc  = (m && m.role === 'client') ? ' by-client' : '';
   const lk  = p.locked;
+  const fn  = escHtml(p.filename);
 
   return `<div class="photo-cell${mc ? ' ' + mc : ''}${rc}${lk ? ' locked' : ''}"
-               data-id="${p.id}" data-idx="${idx}">
-    <img src="${p.thumbDataUrl}" loading="lazy" alt="${p.filename}">
+               data-id="${escHtml(p.id)}" data-idx="${idx}">
+    <img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">
     ${m ? `<div class="mark-badge">${m.mark === 'flag' ? '✓' : '✗'}</div>` : ''}
-    <div class="cell-name">${p.filename}</div>
+    <div class="cell-name">${fn}</div>
     ${lk ? `<div class="locked-overlay"><span style="font-size:20px">🔒</span><span>PRO</span></div>` : ''}
   </div>`;
 }

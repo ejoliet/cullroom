@@ -22,7 +22,12 @@ const { createPrivateKey, sign } = require('crypto');
 // Generated once offline. The matching public key (SPKI DER, base64)
 // is hardcoded in host.html and client.html as PRO_PUBKEY_B64.
 // Replace both keypair constants together if you rotate keys.
-const PRIV_KEY_B64 = 'MC4CAQAwBQYDK2VwBCIEIKA1ZJxYRuYD/px2MMxI8YYgpZ5xjSbYHJxCv833/hsV';
+//
+// SECURITY: Set the CULLROOM_PRIVATE_KEY environment variable in production
+// to avoid storing the private key in source. The fallback hardcoded value
+// is suitable only for local/demo use and should be replaced for real deployments.
+const PRIV_KEY_B64 = process.env.CULLROOM_PRIVATE_KEY
+  || 'MC4CAQAwBQYDK2VwBCIEIKA1ZJxYRuYD/px2MMxI8YYgpZ5xjSbYHJxCv833/hsV';
 
 function usage() {
   console.error('Usage: node keygen.js "Studio Name" "Photographer Name" [maxPhotos]');

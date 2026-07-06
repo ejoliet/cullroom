@@ -214,7 +214,7 @@ button:hover{opacity:.85}
 </div>
 
 <!-- Free-tier badge -->
-<div id="free-badge">powered by <a href="https://github.com/ejoliet/cullroom" target="_blank">cullroom</a></div>
+<div id="free-badge">powered by <a href="https://github.com/ejoliet/cullroom" target="_blank" rel="noopener noreferrer">cullroom</a></div>
 
 <div id="toast" class="toast"></div>
 
@@ -257,6 +257,14 @@ let pendingPreviewResolvers = {}; // id → [{resolve, reject}]
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// AIDEV-NOTE: XSS guard — escape user-controlled strings before innerHTML insertion
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function showToast(msg, dur = 2500) {
   const t = $('toast');
@@ -470,10 +478,14 @@ function requestPreview(id) {
 }
 
 // ── Mark management ────────────────────────────────────────────────────────────
-// AIDEV-NOTE: state sync — last-write-wins (mirrors host logic)
+// AIDEV-NOTE: state sync — last-write-wins (mirrors host logic).
+// Equal timestamps: host role takes priority as tie-breaker.
 function applyMark(id, mark, role, ts) {
   const cur = marks[id];
-  if (cur && cur.ts > ts) return;
+  if (cur) {
+    if (cur.ts > ts) return;
+    if (cur.ts === ts && cur.role === 'host' && role === 'client') return;
+  }
   if (mark === null || mark === undefined) { delete marks[id]; }
   else { marks[id] = { mark, role, ts }; }
   updateCellMark(id);
@@ -490,12 +502,13 @@ function sendMark(id, mark) {
 // ── Grid rendering ─────────────────────────────────────────────────────────────
 function appendCell(idx) {
   const p    = photos[idx];
+  const fn   = escHtml(p.filename);
   const cell = document.createElement('div');
   cell.className      = 'photo-cell';
   cell.dataset.id     = p.id;
   cell.dataset.idx    = idx;
-  cell.innerHTML = `<img src="${p.thumbDataUrl}" loading="lazy" alt="${p.filename}">
-    <div class="cell-name">${p.filename}</div>`;
+  cell.innerHTML = `<img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">
+    <div class="cell-name">${fn}</div>`;
   cell.addEventListener('click',       () => openLightbox(idx));
   cell.addEventListener('contextmenu', e  => { e.preventDefault(); contextMark(p.id); });
   $('grid').appendChild(cell);

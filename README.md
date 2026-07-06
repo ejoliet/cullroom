@@ -95,16 +95,18 @@ cr.proKey     — JSON license string
 After the culling session, export from cullroom:
 
 1. Click **Export CSV** on the host — saves `cullroom-export.csv`
-2. In Lightroom Classic: **File → Import from Another Catalog** — not needed; use metadata filtering instead.
-3. Better: In Library module, open the **Metadata** filter bar and select "Pick Flag" → "Flagged". Then import `cullroom-export.csv` via a plugin (e.g., **LR/Transporter**) to set color labels or flags.
-4. Fastest: Use **Export → filenames.txt** → In Bridge/Lightroom, use "Filter by Filename" with the exported list.
+2. Open Lightroom Classic and select the target folder in the Library module.
+3. Use **LR/Transporter** (free plugin) to import the CSV and set Pick / Rejected flags from the `mark` column.
+4. Filter the Library by Pick Flag to see the client's selects.
 
 **Recommended workflow:**
 ```
 1. cullroom Export CSV → cullroom-export.csv
-2. Open Lightroom → select target folder → Metadata → Filter
-3. Use LR/Transporter (free plugin) to read CSV and apply Pick flags
-4. Stars can be set from "flag" marks; rejects from "reject" marks
+2. Open Lightroom Classic → select the target folder
+3. Use LR/Transporter (free plugin) to read the CSV and apply Pick flags:
+   - "flag" marks → Set Pick Flag
+   - "reject" marks → Set Rejected Flag
+4. In Library module, filter by Pick Flag to see the client's selects
 ```
 
 ---
