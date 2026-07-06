@@ -119,7 +119,7 @@ After the culling session, export from cullroom:
 ## Resilience
 
 - **Host refresh:** Room code persists via `localStorage`. Drag the same folder again — cullroom matches files by filename and restores all marks.
-- **Client disconnect:** Client auto-reconnects every 3 s. On rejoin, host sends full current state.
+- **Client disconnect:** Client auto-reconnects with exponential backoff (2 s doubling to a 30 s cap). After 10 consecutive failures it stops and shows "Session ended — ask for a new link". On rejoin, host sends full current state.
 - **Network loss:** Marks are safe on the host (localStorage). Clients get a full resync on reconnect.
 
 ---

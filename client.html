@@ -235,7 +235,12 @@ button:hover{opacity:.85}
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const RECONNECT_MS = 3000;
+// AIDEV-NOTE: reconnect backoff — exponential 2 s → 30 s cap; after
+// RECONNECT_MAX_ATTEMPTS consecutive failures the session ends permanently
+// (the host is likely gone; hammering the signaling server helps nobody).
+const RECONNECT_BASE_MS      = 2000;
+const RECONNECT_MAX_MS       = 30000;
+const RECONNECT_MAX_ATTEMPTS = 10;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 // AIDEV-NOTE: state sync
@@ -254,6 +259,10 @@ let followMode   = false; // true = follow host lightbox navigation
 let totalExpected = 0;
 let receivedCount = 0;
 let pendingPreviewResolvers = {}; // id → [{resolve, reject}]
+let reconnectAttempts = 0;    // consecutive failed reconnects (reset on open)
+let reconnectTimer    = null; // pending reconnect timeout id
+let sessionEnded      = false;// true after RECONNECT_MAX_ATTEMPTS failures
+let everConnected     = false;// distinguishes reconnect from a bad initial join
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -289,13 +298,15 @@ function setConnBadge(state) {
 }
 
 // ── PeerJS connection ──────────────────────────────────────────────────────────
-// AIDEV-NOTE: PeerJS client — auto-reconnect loop
-// On disconnect the client enters a retry loop (RECONNECT_MS interval).
-// On successful rejoin the host sends hello + full thumb index again,
-// which merges with (and overwrites via last-write-wins) any local mark state.
+// AIDEV-NOTE: PeerJS client — auto-reconnect with exponential backoff.
+// On disconnect the client retries after 2 s, doubling up to a 30 s cap.
+// A successful conn open resets the counter; after RECONNECT_MAX_ATTEMPTS
+// consecutive failures the session ends permanently. On successful rejoin the
+// host sends hello + full thumb index again, which merges with (and overwrites
+// via last-write-wins) any local mark state.
 function connectToHost(code) {
   roomCode = code.trim().toUpperCase();
-  if (!roomCode) return;
+  if (!roomCode || sessionEnded) return;
 
   setConnBadge('connecting');
   $('join-error').textContent = '';
@@ -305,8 +316,12 @@ function connectToHost(code) {
     peer.on('error', err => {
       console.warn('PeerJS error:', err.type, err.message);
       if (err.type === 'peer-unavailable') {
-        $('join-error').textContent = 'Room not found. Check the code and try again.';
         setConnBadge('disconnected');
+        if (everConnected) {
+          scheduleReconnect(); // host room gone mid-session — keep backing off
+        } else {
+          $('join-error').textContent = 'Room not found. Check the code and try again.';
+        }
       }
     });
     peer.on('open', () => openHostConn());
@@ -316,32 +331,60 @@ function connectToHost(code) {
 }
 
 function openHostConn() {
-  if (hostConn) { try { hostConn.close(); } catch {} }
+  if (hostConn) {
+    const old = hostConn;
+    hostConn = null;
+    try { old.close(); } catch {}
+  }
 
-  hostConn = peer.connect(roomCode, { serialization: 'json', reliable: true });
+  const conn = peer.connect(roomCode, { serialization: 'json', reliable: true });
+  hostConn = conn;
 
-  hostConn.on('open', () => {
+  conn.on('open', () => {
+    if (hostConn !== conn) return; // superseded by a newer attempt
+    reconnectAttempts = 0;
+    everConnected = true;
     setConnBadge('connected');
     $('join-error').textContent = '';
   });
 
-  hostConn.on('data', handleHostMessage);
+  conn.on('data', handleHostMessage);
 
-  hostConn.on('close', () => {
+  conn.on('close', () => {
+    if (hostConn !== conn) return;
     setConnBadge('disconnected');
-    showToast('Disconnected — reconnecting…');
-    setTimeout(tryReconnect, RECONNECT_MS);
+    scheduleReconnect();
   });
 
-  hostConn.on('error', err => {
+  conn.on('error', err => {
+    if (hostConn !== conn) return;
     console.warn('Host conn error:', err);
     setConnBadge('disconnected');
-    setTimeout(tryReconnect, RECONNECT_MS);
+    scheduleReconnect();
   });
 }
 
+function scheduleReconnect() {
+  if (sessionEnded || reconnectTimer) return;
+  if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) { endSession(); return; }
+  const wait = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempts, RECONNECT_MAX_MS);
+  reconnectAttempts++;
+  showToast(`Disconnected — reconnecting in ${Math.round(wait / 1000)} s…`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    tryReconnect();
+  }, wait);
+}
+
+function endSession() {
+  sessionEnded = true;
+  setConnBadge('disconnected');
+  $('join-error').textContent = 'Session ended — ask for a new link.';
+  showToast('Session ended — ask for a new link', 8000);
+}
+
 function tryReconnect() {
-  if (!roomCode) return;
+  if (!roomCode || sessionEnded) return;
   if (peer && !peer.destroyed) {
     openHostConn();
   } else {
