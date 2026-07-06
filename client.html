@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cullroom — Client</title>
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<style>
+/* AIDEV-NOTE: Client UI mirrors host.html's dark photography theme.
+   Key difference: no file import, no export — marks and full previews
+   come from the host via PeerJS DataConnection. */
+:root {
+  --bg:#111; --surface:#1a1a1a; --surface2:#242424; --border:#2e2e2e;
+  --text:#e8e8e8; --dim:#888; --accent:#f5a623;
+  --flag:#4CAF50; --reject:#e53935;
+  --flag-client:#29B6F6; --reject-client:#FF7043;
+  --radius:6px; --cell-min:150px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,sans-serif}
+button{cursor:pointer;border:none;border-radius:var(--radius);padding:6px 14px;font-size:13px;transition:opacity .15s}
+button:hover{opacity:.85}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-accent{background:var(--accent);color:#111;font-weight:600}
+
+/* ── header ── */
+#header{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:50;
+}
+#logo{font-weight:700;font-size:16px;color:var(--accent);letter-spacing:-.5px}
+#studio-name{font-size:13px;color:var(--dim);flex:1}
+#conn-badge{
+  font-size:12px;padding:3px 10px;border-radius:20px;
+  background:var(--surface2);border:1px solid var(--border);
+}
+#conn-badge.connected   {border-color:var(--flag);  color:var(--flag)}
+#conn-badge.connecting  {border-color:var(--accent);color:var(--accent)}
+#conn-badge.disconnected{border-color:var(--reject); color:var(--reject)}
+#follow-indicator{font-size:11px;padding:2px 8px;border-radius:20px;background:#1e3a2e;border:1px solid var(--flag);color:var(--flag);display:none}
+
+/* ── join form ── */
+#join-wrap{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:70vh;padding:24px;gap:16px;
+}
+#join-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:min(400px,90vw);text-align:center}
+#join-box h2{font-size:20px;margin-bottom:8px}
+#join-box p{color:var(--dim);font-size:13px;margin-bottom:20px}
+#room-input{
+  width:100%;text-align:center;font-size:28px;font-family:monospace;font-weight:700;
+  letter-spacing:4px;text-transform:uppercase;
+  background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+  color:var(--text);padding:12px;margin-bottom:12px;
+}
+#room-input:focus{outline:2px solid var(--accent);border-color:transparent}
+#join-error{color:var(--reject);font-size:12px;margin-top:6px;min-height:18px}
+#cullroom-badge{font-size:11px;color:var(--dim);margin-top:12px;display:none}
+
+/* ── loading ── */
+#loading-wrap{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px}
+#loading-progress{font-size:13px;color:var(--dim)}
+#loading-bar-wrap{width:300px;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+#loading-fill{height:100%;background:var(--accent);width:0%;transition:width .3s}
+
+/* ── status bar ── */
+#status-bar{padding:8px 16px;font-size:12px;color:var(--dim);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+
+/* ── grid ── */
+#grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(var(--cell-min),1fr));
+  gap:4px;padding:8px;
+}
+.photo-cell{
+  position:relative;overflow:hidden;cursor:pointer;border-radius:4px;
+  background:var(--surface2);border:2px solid transparent;
+  aspect-ratio:3/2;transition:transform .12s;
+}
+.photo-cell:hover{transform:scale(1.02);z-index:2}
+.photo-cell img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+
+.photo-cell.flag          {border-color:var(--flag)}
+.photo-cell.reject        {border-color:var(--reject)}
+.photo-cell.flag.by-host  {border-color:var(--flag)}
+.photo-cell.reject.by-host{border-color:var(--reject)}
+.photo-cell.flag.by-client  {border-color:var(--flag-client)}
+.photo-cell.reject.by-client{border-color:var(--reject-client)}
+
+.mark-badge{
+  position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+}
+.photo-cell.flag   .mark-badge{background:var(--flag);color:#fff}
+.photo-cell.reject .mark-badge{background:var(--reject);color:#fff}
+.photo-cell.flag.by-client   .mark-badge{background:var(--flag-client);color:#000}
+.photo-cell.reject.by-client .mark-badge{background:var(--reject-client);color:#fff}
+
+.cell-name{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(transparent,rgba(0,0,0,.7));
+  padding:16px 4px 4px;font-size:10px;color:#ccc;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  opacity:0;transition:opacity .15s;
+}
+.photo-cell:hover .cell-name{opacity:1}
+
+/* ── lightbox ── */
+#lightbox{
+  display:none;position:fixed;inset:0;z-index:100;
+  background:rgba(0,0,0,.95);flex-direction:column;
+  align-items:center;justify-content:center;
+}
+#lb-img{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain;display:block}
+#lb-controls{
+  position:absolute;bottom:0;left:0;right:0;
+  padding:12px 20px;background:linear-gradient(transparent,rgba(0,0,0,.8));
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+#lb-filename{font-size:13px;color:#ccc;flex:1}
+#lb-mark-info{font-size:12px;padding:3px 8px;border-radius:20px;background:var(--surface2)}
+#lb-actions{display:flex;gap:6px}
+.lb-mark-btn{padding:6px 16px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:opacity .15s}
+#lb-flag-btn  {background:var(--flag);  color:#fff}
+#lb-reject-btn{background:var(--reject);color:#fff}
+#lb-clear-btn {background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.lb-mark-btn:hover{opacity:.85}
+#lb-counter{position:absolute;top:16px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--dim)}
+#lb-spinner{display:none;position:absolute;inset:0;align-items:center;justify-content:center;pointer-events:none}
+.spinner{width:32px;height:32px;border:3px solid var(--surface2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.lb-arrow{
+  width:48px;height:48px;border-radius:50%;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:20px;color:#fff;transition:background .15s;
+  position:absolute;top:50%;transform:translateY(-50%);
+}
+.lb-arrow:hover{background:rgba(255,255,255,.2)}
+#lb-prev{left:16px}
+#lb-next{right:16px}
+#lb-close{position:absolute;top:16px;right:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:18px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+
+/* ── free badge ── */
+#free-badge{
+  position:fixed;bottom:12px;right:12px;z-index:200;
+  background:rgba(0,0,0,.7);border:1px solid var(--border);border-radius:var(--radius);
+  padding:6px 12px;font-size:11px;color:var(--dim);
+  display:none;
+}
+#free-badge a{color:var(--accent)}
+
+/* ── misc ── */
+.toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:8px 16px;font-size:13px;z-index:300;opacity:0;transition:opacity .3s;pointer-events:none;
+}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <span id="logo">cullroom</span>
+  <span id="studio-name"></span>
+  <span id="follow-indicator">👁 Following host</span>
+  <span id="conn-badge" class="disconnected">Disconnected</span>
+</div>
+
+<!-- Join screen -->
+<div id="join-wrap">
+  <div id="join-box">
+    <h2>Join a culling session</h2>
+    <p>Enter the room code from your photographer</p>
+    <input type="text" id="room-input" maxlength="10" placeholder="XXXXXX" autocomplete="off" spellcheck="false">
+    <button class="btn-accent" id="join-btn" style="width:100%">Join Session</button>
+    <div id="join-error"></div>
+  </div>
+</div>
+
+<!-- Loading screen -->
+<div id="loading-wrap">
+  <div id="loading-progress">Receiving photo index…</div>
+  <div id="loading-bar-wrap"><div id="loading-fill"></div></div>
+</div>
+
+<!-- Grid + status (hidden until photos arrive) -->
+<div id="status-bar" style="display:none">
+  <span id="status-msg"></span>
+  <span id="mark-summary"></span>
+</div>
+<div id="grid"></div>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <div id="lb-close" onclick="closeLightbox()">✕</div>
+  <div id="lb-counter"></div>
+  <div class="lb-arrow" id="lb-prev" onclick="lightboxStep(-1)">‹</div>
+  <img id="lb-img" src="" alt="">
+  <div id="lb-spinner"><div class="spinner"></div></div>
+  <div class="lb-arrow" id="lb-next" onclick="lightboxStep(1)">›</div>
+  <div id="lb-controls">
+    <div id="lb-filename"></div>
+    <div id="lb-mark-info"></div>
+    <div id="lb-actions">
+      <button class="lb-mark-btn" id="lb-flag-btn"   onclick="markLightbox('flag')">✓ Flag (F)</button>
+      <button class="lb-mark-btn" id="lb-reject-btn" onclick="markLightbox('reject')">✗ Reject (X)</button>
+      <button class="lb-mark-btn" id="lb-clear-btn"  onclick="markLightbox(null)">Clear (U)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Free-tier badge -->
+<div id="free-badge">powered by <a href="https://github.com/ejoliet/cullroom" target="_blank">cullroom</a></div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// AIDEV-NOTE: Architecture — client side
+// client.html is a pure consumer in the star topology:
+//   1. Reads ?room= from the URL (or manual entry) to find the host Peer ID
+//   2. Opens a DataConnection to the host; receives thumbnail batches
+//      (AIDEV-NOTE: state sync — on join, host sends full marks + all thumbs)
+//   3. Requests full previews lazily when the user opens the lightbox
+//   4. Sends mark events to host; receives mark events from host (broadcasts)
+//   5. Auto-reconnects on disconnect and gets full state resync from host
+//   6. Shows "cullroom" badge on free tier; shows studio branding on pro tier
+// ═══════════════════════════════════════════════════════════════════════════════
+
+'use strict';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const RECONNECT_MS = 3000;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+// AIDEV-NOTE: state sync
+// `photos` is populated from thumb-batch messages. `marks` is seeded from
+// the hello message and updated incrementally by mark messages.
+// `previewCache` caches fetched full previews so re-opening is instant.
+let photos       = [];   // [{id, filename, thumbDataUrl}]
+let marks        = {};   // id → {mark, role, ts}
+let previewCache = {};   // id → dataURL
+let peer         = null;
+let hostConn     = null;
+let roomCode     = null;
+let isFree       = true;
+let lbIdx        = null;
+let followMode   = false; // true = follow host lightbox navigation
+let totalExpected = 0;
+let receivedCount = 0;
+let pendingPreviewResolvers = {}; // id → [{resolve, reject}]
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+function showToast(msg, dur = 2500) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+function setConnBadge(state) {
+  const b = $('conn-badge');
+  b.className = 'conn-badge ' + state;
+  b.textContent = state === 'connected' ? 'Connected' : state === 'connecting' ? 'Connecting…' : 'Disconnected';
+}
+
+// ── PeerJS connection ──────────────────────────────────────────────────────────
+// AIDEV-NOTE: PeerJS client — auto-reconnect loop
+// On disconnect the client enters a retry loop (RECONNECT_MS interval).
+// On successful rejoin the host sends hello + full thumb index again,
+// which merges with (and overwrites via last-write-wins) any local mark state.
+function connectToHost(code) {
+  roomCode = code.trim().toUpperCase();
+  if (!roomCode) return;
+
+  setConnBadge('connecting');
+  $('join-error').textContent = '';
+
+  if (!peer || peer.destroyed) {
+    peer = new Peer({ debug: 0 });
+    peer.on('error', err => {
+      console.warn('PeerJS error:', err.type, err.message);
+      if (err.type === 'peer-unavailable') {
+        $('join-error').textContent = 'Room not found. Check the code and try again.';
+        setConnBadge('disconnected');
+      }
+    });
+    peer.on('open', () => openHostConn());
+  } else {
+    openHostConn();
+  }
+}
+
+function openHostConn() {
+  if (hostConn) { try { hostConn.close(); } catch {} }
+
+  hostConn = peer.connect(roomCode, { serialization: 'json', reliable: true });
+
+  hostConn.on('open', () => {
+    setConnBadge('connected');
+    $('join-error').textContent = '';
+  });
+
+  hostConn.on('data', handleHostMessage);
+
+  hostConn.on('close', () => {
+    setConnBadge('disconnected');
+    showToast('Disconnected — reconnecting…');
+    setTimeout(tryReconnect, RECONNECT_MS);
+  });
+
+  hostConn.on('error', err => {
+    console.warn('Host conn error:', err);
+    setConnBadge('disconnected');
+    setTimeout(tryReconnect, RECONNECT_MS);
+  });
+}
+
+function tryReconnect() {
+  if (!roomCode) return;
+  if (peer && !peer.destroyed) {
+    openHostConn();
+  } else {
+    peer = null;
+    connectToHost(roomCode);
+  }
+}
+
+// ── Host message handler ───────────────────────────────────────────────────────
+// AIDEV-NOTE: state sync — message handling
+// hello   → seeds total, marks, branding; shows loading screen
+// thumb-batch → appends photos[], advances progress bar, renders grid incrementally
+// index-ready → hides loading, shows grid
+// preview-data → resolves pending lightbox promise
+// mark    → merges into marks[] with last-write-wins
+// follow  → if followMode, opens that photo in lightbox
+// error   → shows message + disconnects
+function handleHostMessage(msg) {
+  if (!msg || !msg.type) return;
+
+  switch (msg.type) {
+
+    case 'hello': {
+      totalExpected = msg.total || 0;
+      receivedCount = 0;
+      isFree        = msg.isFree !== false;
+      photos        = [];
+      marks         = {};
+
+      // Seed marks from host's current state
+      if (msg.marks) {
+        for (const [id, m] of Object.entries(msg.marks)) marks[id] = m;
+      }
+
+      // Studio branding
+      if (msg.studioName) {
+        $('studio-name').textContent = msg.studioName;
+        document.title = `${msg.studioName} — Cullroom`;
+      }
+
+      // Show free badge
+      $('free-badge').style.display = isFree ? 'block' : 'none';
+
+      // Switch to loading view
+      $('join-wrap').style.display     = 'none';
+      $('loading-wrap').style.display  = 'flex';
+      $('status-bar').style.display    = 'none';
+      $('grid').innerHTML              = '';
+      $('loading-fill').style.width    = '0%';
+      $('loading-progress').textContent = `Receiving photo index (0 / ${totalExpected})…`;
+      break;
+    }
+
+    case 'thumb-batch': {
+      const { batch, total } = msg;
+      if (!batch) break;
+      for (const item of batch) {
+        if (!photos.find(p => p.id === item.id)) {
+          photos.push({ id: item.id, filename: item.filename, thumbDataUrl: item.thumb });
+          appendCell(photos.length - 1);
+        }
+      }
+      receivedCount = photos.length;
+      const pct = total ? Math.round((receivedCount / total) * 100) : 0;
+      $('loading-fill').style.width    = pct + '%';
+      $('loading-progress').textContent = `Receiving photo index (${receivedCount} / ${total || '?'})…`;
+      break;
+    }
+
+    case 'index-ready': {
+      // AIDEV-NOTE: state sync — grid is ready; show it and re-apply all marks
+      $('loading-wrap').style.display = 'none';
+      $('status-bar').style.display   = 'flex';
+      $('status-msg').textContent     = `${photos.length} photos loaded`;
+      // Re-render mark state on any cells already in DOM
+      for (const id of Object.keys(marks)) updateCellMark(id);
+      updateMarkSummary();
+      break;
+    }
+
+    case 'preview-data': {
+      const { id, data } = msg;
+      previewCache[id] = data;
+      const resolvers = pendingPreviewResolvers[id] || [];
+      delete pendingPreviewResolvers[id];
+      for (const { resolve } of resolvers) resolve(data);
+      break;
+    }
+
+    case 'preview-error': {
+      const { id, msg: errMsg } = msg;
+      const resolvers = pendingPreviewResolvers[id] || [];
+      delete pendingPreviewResolvers[id];
+      for (const { reject } of resolvers) reject(new Error(errMsg));
+      break;
+    }
+
+    case 'mark': {
+      const { id, mark, role, ts } = msg;
+      applyMark(id, mark, role, ts);
+      break;
+    }
+
+    case 'follow': {
+      if (!followMode) break;
+      const idx = photos.findIndex(p => p.id === msg.id);
+      if (idx !== -1) openLightbox(idx);
+      break;
+    }
+
+    case 'follow-mode': {
+      followMode = msg.enabled;
+      $('follow-indicator').style.display = followMode ? 'inline-block' : 'none';
+      if (followMode) showToast('Following host navigation…');
+      break;
+    }
+
+    case 'error': {
+      showToast(msg.msg || 'Connection error.', 5000);
+      setConnBadge('disconnected');
+      break;
+    }
+  }
+}
+
+// ── Preview fetching ───────────────────────────────────────────────────────────
+// AIDEV-NOTE: lazy preview serving (client side)
+// requestPreview() sends a preview-req to the host only once per photo.
+// If a request is already in flight (pendingPreviewResolvers has entry),
+// the caller just appends its resolve/reject to the queue.
+// Resolved data URLs are cached in previewCache for instant re-open.
+function requestPreview(id) {
+  if (previewCache[id]) return Promise.resolve(previewCache[id]);
+
+  return new Promise((resolve, reject) => {
+    if (!pendingPreviewResolvers[id]) {
+      pendingPreviewResolvers[id] = [];
+      if (hostConn?.open) hostConn.send({ type: 'preview-req', id });
+      else reject(new Error('Not connected'));
+    }
+    pendingPreviewResolvers[id].push({ resolve, reject });
+  });
+}
+
+// ── Mark management ────────────────────────────────────────────────────────────
+// AIDEV-NOTE: state sync — last-write-wins (mirrors host logic)
+function applyMark(id, mark, role, ts) {
+  const cur = marks[id];
+  if (cur && cur.ts > ts) return;
+  if (mark === null || mark === undefined) { delete marks[id]; }
+  else { marks[id] = { mark, role, ts }; }
+  updateCellMark(id);
+  updateLightboxMark();
+  updateMarkSummary();
+}
+
+function sendMark(id, mark) {
+  const ts = Date.now();
+  applyMark(id, mark, 'client', ts);
+  if (hostConn?.open) hostConn.send({ type: 'mark', id, mark, ts });
+}
+
+// ── Grid rendering ─────────────────────────────────────────────────────────────
+function appendCell(idx) {
+  const p    = photos[idx];
+  const cell = document.createElement('div');
+  cell.className      = 'photo-cell';
+  cell.dataset.id     = p.id;
+  cell.dataset.idx    = idx;
+  cell.innerHTML = `<img src="${p.thumbDataUrl}" loading="lazy" alt="${p.filename}">
+    <div class="cell-name">${p.filename}</div>`;
+  cell.addEventListener('click',       () => openLightbox(idx));
+  cell.addEventListener('contextmenu', e  => { e.preventDefault(); contextMark(p.id); });
+  $('grid').appendChild(cell);
+}
+
+function updateCellMark(id) {
+  const cell = $('grid').querySelector(`.photo-cell[data-id="${id}"]`);
+  if (!cell) return;
+  const m  = marks[id];
+  const mc = m?.mark || '';
+  const rc = m ? ' by-' + m.role : '';
+  cell.className = 'photo-cell' + (mc ? ' ' + mc : '') + rc;
+  let badge = cell.querySelector('.mark-badge');
+  if (m) {
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'mark-badge';
+      cell.appendChild(badge);
+    }
+    badge.textContent = m.mark === 'flag' ? '✓' : '✗';
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function contextMark(id) {
+  const cur  = marks[id]?.mark;
+  const next = cur === 'flag' ? 'reject' : cur === 'reject' ? null : 'flag';
+  sendMark(id, next);
+}
+
+function updateMarkSummary() {
+  const flags   = Object.values(marks).filter(m => m.mark === 'flag').length;
+  const rejects = Object.values(marks).filter(m => m.mark === 'reject').length;
+  const total   = photos.length;
+  $('mark-summary').textContent =
+    total ? `${flags} selected · ${rejects} rejected · ${total - flags - rejects} unmarked` : '';
+}
+
+// ── Lightbox ───────────────────────────────────────────────────────────────────
+function openLightbox(idx) {
+  if (idx < 0 || idx >= photos.length) return;
+  lbIdx = idx;
+  const p  = photos[idx];
+  const lb = $('lightbox');
+  lb.style.display = 'flex';
+
+  $('lb-img').src     = p.thumbDataUrl;
+  $('lb-filename').textContent = p.filename;
+  $('lb-counter').textContent  = `${idx + 1} / ${photos.length}`;
+  $('lb-prev').style.visibility = idx > 0 ? 'visible' : 'hidden';
+  $('lb-next').style.visibility = idx < photos.length - 1 ? 'visible' : 'hidden';
+  updateLightboxMark();
+
+  // Lazy-fetch full preview from host
+  loadLightboxFull(p);
+}
+
+async function loadLightboxFull(p) {
+  if (previewCache[p.id]) {
+    $('lb-img').src = previewCache[p.id];
+    return;
+  }
+  const spinner = $('lb-spinner');
+  spinner.style.display = 'flex';
+  try {
+    const dataUrl = await requestPreview(p.id);
+    // Only update if still viewing this photo
+    if (photos[lbIdx]?.id === p.id) $('lb-img').src = dataUrl;
+  } catch (e) {
+    showToast('Preview unavailable: ' + (e.message || e));
+  } finally {
+    spinner.style.display = 'none';
+  }
+}
+
+function updateLightboxMark() {
+  if (lbIdx === null) return;
+  const p = photos[lbIdx];
+  if (!p) return;
+  const m    = marks[p.id];
+  const info = $('lb-mark-info');
+  if (m) {
+    const icon  = m.mark === 'flag' ? '✓ Flagged' : '✗ Rejected';
+    const actor = m.role === 'host' ? '📸 Photographer' : '👤 Client';
+    info.textContent = `${icon} by ${actor}`;
+    info.style.color  = m.mark === 'flag' ? 'var(--flag)' : 'var(--reject)';
+  } else {
+    info.textContent = 'Unmarked';
+    info.style.color  = 'var(--dim)';
+  }
+}
+
+function closeLightbox() {
+  lbIdx = null;
+  $('lightbox').style.display = 'none';
+  $('lb-img').src = '';
+}
+
+function lightboxStep(dir) {
+  if (lbIdx === null) return;
+  const next = lbIdx + dir;
+  if (next >= 0 && next < photos.length) openLightbox(next);
+}
+
+function markLightbox(mark) {
+  if (lbIdx === null) return;
+  sendMark(photos[lbIdx].id, mark);
+}
+
+// ── Event handlers ────────────────────────────────────────────────────────────
+$('room-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doJoin();
+});
+$('room-input').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+});
+$('join-btn').addEventListener('click', doJoin);
+
+function doJoin() {
+  const code = $('room-input').value.trim();
+  if (code.length < 4) { $('join-error').textContent = 'Enter a valid room code.'; return; }
+  connectToHost(code);
+}
+
+document.addEventListener('keydown', e => {
+  if ($('lightbox').style.display === 'flex') {
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowDown':  lightboxStep(1);  break;
+      case 'ArrowLeft':  case 'ArrowUp':    lightboxStep(-1); break;
+      case 'Escape':                        closeLightbox();  break;
+      case 'f': case 'F':                   markLightbox('flag');   break;
+      case 'x': case 'X':                   markLightbox('reject'); break;
+      case 'u': case 'U':                   markLightbox(null);     break;
+    }
+  }
+});
+
+// ── Auto-join from URL ─────────────────────────────────────────────────────────
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  const room   = params.get('room');
+  if (room) {
+    $('room-input').value = room.toUpperCase();
+    connectToHost(room);
+  }
+})();
+</script>
+</body>
+</html>
