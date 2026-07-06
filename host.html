@@ -283,7 +283,13 @@ const FREE_TIER_LIMIT  = 50;
 const THUMB_MAX_DIM    = 320;
 const PREVIEW_MAX_DIM  = 1600;
 const THUMB_BATCH_SIZE = 20;   // AIDEV-NOTE: chunking — thumbnails sent in batches to avoid DataChannel overflow
-const THUMB_BATCH_MS   = 15;   // yield interval between batches (ms)
+// AIDEV-NOTE: backpressure — sender pauses when the underlying RTCDataChannel
+// bufferedAmount exceeds BUFFER_PAUSE and resumes once it drains below
+// BUFFER_RESUME (polled every BUFFER_POLL_MS). Time-based pacing alone would
+// overflow the channel on slow links.
+const BUFFER_PAUSE   = 1024 * 1024; // 1 MB  — stop sending above this
+const BUFFER_RESUME  = 256  * 1024; // 256 KB — resume sending below this
+const BUFFER_POLL_MS = 25;
 // AIDEV-NOTE: chunking — yield every YIELD_INTERVAL photos during thumbnail generation
 // to release the main thread and keep the UI responsive. Lower values increase
 // responsiveness at the cost of slightly longer total import time.
@@ -635,10 +641,25 @@ function updateClientCount() {
 }
 
 // ── Initial state push ─────────────────────────────────────────────────────────
-// AIDEV-NOTE: chunking — thumbnail batch send
-// Thumbnails are sent in THUMB_BATCH_SIZE groups with THUMB_BATCH_MS delay
-// between each group. This prevents the WebRTC DataChannel buffer from
-// filling up and triggering a dropped-connection on 300-photo sessions.
+// AIDEV-NOTE: backpressure — wait for the RTCDataChannel send buffer to drain.
+// Once bufferedAmount exceeds BUFFER_PAUSE we poll every BUFFER_POLL_MS and
+// only resume when it drops below BUFFER_RESUME (hysteresis avoids thrashing
+// right at the threshold). Returns false if the connection closed while waiting.
+async function waitForDrain(conn) {
+  if (!conn.open) return false;
+  const dc = conn.dataChannel;
+  if (!dc || dc.bufferedAmount <= BUFFER_PAUSE) return true;
+  while (conn.open && conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_RESUME) {
+    await delay(BUFFER_POLL_MS);
+  }
+  return conn.open;
+}
+
+// AIDEV-NOTE: chunking + backpressure — thumbnail batch send
+// Thumbnails are sent in THUMB_BATCH_SIZE groups. Between batches the loop
+// waits for the DataChannel bufferedAmount to drain (see waitForDrain) instead
+// of a fixed timer, so slow links throttle the push rather than overflow the
+// channel. The loop aborts if the connection closes mid-send.
 // A 320px JPEG thumb is ~15-25 KB; 300 thumbs ≈ 5–8 MB as data URLs in JSON.
 async function sendInitialState(conn) {
   const limit   = proInfo ? proInfo.maxPhotos : FREE_TIER_LIMIT;
@@ -654,17 +675,17 @@ async function sendInitialState(conn) {
   });
 
   for (let i = 0; i < visible.length; i += THUMB_BATCH_SIZE) {
+    if (!await waitForDrain(conn)) return; // client disconnected mid-send
     const batch = visible.slice(i, i + THUMB_BATCH_SIZE).map(p => ({
       id: p.id,
       filename: p.filename,
       thumb: p.thumbDataUrl,
     }));
     try { conn.send({ type: 'thumb-batch', batch, total: visible.length }); }
-    catch { break; } // client disconnected mid-send
-    await delay(THUMB_BATCH_MS);
+    catch { return; } // client disconnected mid-send
   }
 
-  conn.send({ type: 'index-ready' });
+  if (conn.open) conn.send({ type: 'index-ready' });
 }
 
 function broadcastHello() {
