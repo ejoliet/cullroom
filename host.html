@@ -290,6 +290,8 @@ const THUMB_BATCH_SIZE = 20;   // AIDEV-NOTE: chunking — thumbnails sent in ba
 const BUFFER_PAUSE   = 1024 * 1024; // 1 MB  — stop sending above this
 const BUFFER_RESUME  = 256  * 1024; // 256 KB — resume sending below this
 const BUFFER_POLL_MS = 25;
+const PREVIEW_CACHE_MAX   = 40; // host-side LRU cap for encoded previews
+const PREVIEW_INFLIGHT_MAX = 2; // concurrent preview jobs per client
 // AIDEV-NOTE: chunking — yield every YIELD_INTERVAL photos during thumbnail generation
 // to release the main thread and keep the UI responsive. Lower values increase
 // responsiveness at the cost of slightly longer total import time.
@@ -323,6 +325,18 @@ let proInfo     = null; // null | {name,studio,maxPhotos}
 let followMode  = false;
 let lbIdx       = null; // current lightbox index into photos[]
 let lbFullLoaded= new Set(); // ids for which full preview is loaded in the lightbox
+let lastLbUrl   = null; // previous lightbox object URL, revoked on navigate/close
+
+// AIDEV-NOTE: preview cache — Map iteration order gives us LRU for free:
+// get() re-inserts the entry, put() evicts the oldest key past the cap.
+// A preview is encoded once per photo, not per request per client.
+const previewCache = new Map(); // id → dataURL (LRU, capped at PREVIEW_CACHE_MAX)
+// AIDEV-NOTE: preview throttle — per-client job state. At most
+// PREVIEW_INFLIGHT_MAX jobs run per client; while at the cap only the LATEST
+// requested id is remembered (pendingId), so arrow-key skimming lands on the
+// photo the client stopped at instead of replaying every intermediate one.
+// Superseded requests are dropped silently — the client resolves preview-data by id.
+const previewJobs = new Map(); // peerId → {inFlight:number, pendingId:string|null}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -495,6 +509,7 @@ async function importFiles(files) {
   }
 
   photos = newPhotos;
+  previewCache.clear(); // files may have changed for restored ids
 
   // Restore marks from localStorage (match by id)
   marks = markMap;
@@ -624,6 +639,7 @@ function handleIncoming(conn) {
 
   conn.on('close', () => {
     delete clients[conn.peer];
+    previewJobs.delete(conn.peer);
     updateClientCount();
     setStatus(`Client left (${Object.keys(clients).length} connected)`);
   });
@@ -631,6 +647,7 @@ function handleIncoming(conn) {
   conn.on('error', err => {
     console.warn('Client conn error:', conn.peer, err);
     delete clients[conn.peer];
+    previewJobs.delete(conn.peer);
     updateClientCount();
   });
 }
@@ -718,18 +735,60 @@ function handleClientMessage(conn, msg) {
 // AIDEV-NOTE: lazy preview serving
 // Full-resolution previews are generated and sent ONLY when a client opens
 // the lightbox for a specific photo. This keeps the initial join fast and
-// avoids transferring photos the client never views.
-async function servePreview(conn, id) {
+// avoids transferring photos the client never views. Encoded previews are
+// LRU-cached host-side, jobs are capped per client (latest request wins when
+// at the cap), and preview-data respects DataChannel backpressure.
+function previewCacheGet(id) {
+  if (!previewCache.has(id)) return null;
+  const data = previewCache.get(id);
+  previewCache.delete(id);
+  previewCache.set(id, data); // refresh recency
+  return data;
+}
+
+function previewCachePut(id, data) {
+  previewCache.set(id, data);
+  while (previewCache.size > PREVIEW_CACHE_MAX) {
+    previewCache.delete(previewCache.keys().next().value); // evict oldest
+  }
+}
+
+function servePreview(conn, id) {
+  let st = previewJobs.get(conn.peer);
+  if (!st) { st = { inFlight: 0, pendingId: null }; previewJobs.set(conn.peer, st); }
+
+  if (st.inFlight >= PREVIEW_INFLIGHT_MAX) {
+    st.pendingId = id; // overwrite: only the latest requested id survives
+    return;
+  }
+
+  st.inFlight++;
+  runPreviewJob(conn, id).finally(() => {
+    st.inFlight--;
+    if (st.pendingId !== null && conn.open) {
+      const next = st.pendingId;
+      st.pendingId = null;
+      servePreview(conn, next);
+    }
+  });
+}
+
+async function runPreviewJob(conn, id) {
   const photo = photos.find(p => p.id === id);
   if (!photo?.file) {
-    conn.send({ type: 'preview-error', id, msg: 'File not available — host may need to re-import.' });
+    if (conn.open) conn.send({ type: 'preview-error', id, msg: 'File not available — host may need to re-import.' });
     return;
   }
   try {
-    const data = await generatePreviewDataUrl(photo.file);
+    let data = previewCacheGet(id);
+    if (!data) {
+      data = await generatePreviewDataUrl(photo.file);
+      previewCachePut(id, data);
+    }
+    if (!await waitForDrain(conn)) return; // client left while buffer drained
     conn.send({ type: 'preview-data', id, data });
   } catch (e) {
-    conn.send({ type: 'preview-error', id, msg: String(e) });
+    if (conn.open) conn.send({ type: 'preview-error', id, msg: String(e) });
   }
 }
 
