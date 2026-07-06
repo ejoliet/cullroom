@@ -898,7 +898,11 @@ function openLightbox(idx) {
 
   $('lb-img').src = p.thumbDataUrl;
   $('lb-filename').textContent = p.filename;
-  $('lb-counter').textContent  = `${idx + 1} / ${photos.filter(ph => !ph.locked).length}`;
+  // AIDEV-NOTE: counter is position among UNLOCKED photos — using the raw grid
+  // index against the unlocked total could show impossible values like "63 / 50".
+  const unlocked = photos.filter(ph => !ph.locked);
+  const pos = unlocked.findIndex(ph => ph.id === p.id) + 1;
+  $('lb-counter').textContent  = `${pos} / ${unlocked.length}`;
   $('lb-prev').style.visibility = idx > 0 ? 'visible' : 'hidden';
   $('lb-next').style.visibility = idx < photos.length - 1 ? 'visible' : 'hidden';
 
