@@ -725,10 +725,17 @@ function handleClientMessage(conn, msg) {
     case 'preview-req':
       servePreview(conn, msg.id);
       break;
-    case 'mark':
-      applyMark(msg.id, msg.mark, 'client', msg.ts || Date.now());
-      broadcast({ type: 'mark', id: msg.id, mark: msg.mark, role: 'client', ts: msg.ts }, conn.peer);
+    case 'mark': {
+      // AIDEV-NOTE: timestamp hygiene — clamp client-supplied ts to now+2s so a
+      // skewed/malicious client clock cannot permanently outrank host marks in
+      // last-write-wins. The same normalized ts is used for applyMark AND the
+      // relay broadcast (previously the relay forwarded msg.ts verbatim, which
+      // could be undefined).
+      const ts = Math.min(Number(msg.ts) || Date.now(), Date.now() + 2000);
+      applyMark(msg.id, msg.mark, 'client', ts);
+      broadcast({ type: 'mark', id: msg.id, mark: msg.mark, role: 'client', ts }, conn.peer);
       break;
+    }
   }
 }
 
