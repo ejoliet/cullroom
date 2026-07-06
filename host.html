@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cullroom — Host</title>
+<!-- AIDEV-NOTE: vendored peerjs@1.5.5 — no CDN dependency, works on offline LAN -->
+<script src="vendor/peerjs.min.js"></script>
+<style>
+/* AIDEV-NOTE: Dark photography UI — CSS variables for easy theming */
+:root {
+  --bg:#111; --surface:#1a1a1a; --surface2:#242424; --border:#2e2e2e;
+  --text:#e8e8e8; --dim:#888; --accent:#f5a623;
+  --flag:#4CAF50; --reject:#e53935;
+  --flag-client:#29B6F6; --reject-client:#FF7043;
+  --radius:6px; --cell-min:150px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,sans-serif}
+a{color:var(--accent)}
+button{cursor:pointer;border:none;border-radius:var(--radius);padding:6px 14px;font-size:13px;transition:opacity .15s}
+button:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:default}
+.btn-accent{background:var(--accent);color:#111;font-weight:600}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-sm{padding:4px 10px;font-size:12px}
+
+/* ── header ── */
+#header{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:50;
+}
+#logo{font-weight:700;font-size:16px;color:var(--accent);letter-spacing:-.5px}
+#room-wrap{display:flex;align-items:center;gap:6px;margin-left:auto}
+#room-code{
+  font-family:monospace;font-size:15px;font-weight:700;letter-spacing:2px;
+  background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:4px 10px;
+}
+#client-badge{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:12px}
+#follow-btn{font-size:12px}
+#follow-btn.active{background:#1e3a2e;border-color:var(--flag);color:var(--flag)}
+#header-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+
+/* ── import zone ── */
+#import-wrap{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:50vh;padding:24px;
+}
+#drop-zone{
+  border:2px dashed var(--border);border-radius:12px;
+  padding:48px 64px;text-align:center;cursor:pointer;
+  transition:border-color .2s,background .2s;max-width:480px;width:100%;
+}
+#drop-zone.drag-over{border-color:var(--accent);background:#1e1800}
+#drop-zone svg{opacity:.4;margin-bottom:12px}
+#drop-zone h2{font-size:18px;font-weight:600;margin-bottom:8px}
+#drop-zone p{color:var(--dim);font-size:13px}
+#drop-zone label{color:var(--accent);cursor:pointer;text-decoration:underline}
+#file-input,#folder-input{display:none}
+
+/* ── restore banner ── */
+#restore-banner{
+  display:none;background:#1a1500;border:1px solid #403000;border-radius:var(--radius);
+  padding:12px 16px;margin:16px;font-size:13px;
+}
+#restore-banner span{color:var(--accent)}
+
+/* ── status bar ── */
+#status-bar{
+  padding:8px 16px;font-size:12px;color:var(--dim);
+  display:flex;gap:16px;align-items:center;flex-wrap:wrap;
+}
+#loading-bar{height:3px;background:var(--surface2);position:relative;overflow:hidden}
+#loading-fill{height:100%;background:var(--accent);width:0%;transition:width .3s}
+
+/* ── grid ── */
+#grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(var(--cell-min),1fr));
+  gap:4px;padding:8px;
+}
+.photo-cell{
+  position:relative;overflow:hidden;cursor:pointer;border-radius:4px;
+  background:var(--surface2);border:2px solid transparent;
+  aspect-ratio:3/2;transition:transform .12s;
+}
+.photo-cell:hover{transform:scale(1.02);z-index:2}
+.photo-cell img{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+
+/* mark styles */
+.photo-cell.flag          {border-color:var(--flag)}
+.photo-cell.reject        {border-color:var(--reject)}
+.photo-cell.flag.by-client{border-color:var(--flag-client)}
+.photo-cell.reject.by-client{border-color:var(--reject-client)}
+
+.mark-badge{
+  position:absolute;top:4px;right:4px;
+  width:20px;height:20px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;line-height:1;
+}
+.photo-cell.flag   .mark-badge{background:var(--flag);color:#fff}
+.photo-cell.reject .mark-badge{background:var(--reject);color:#fff}
+.photo-cell.flag.by-client   .mark-badge{background:var(--flag-client);color:#000}
+.photo-cell.reject.by-client .mark-badge{background:var(--reject-client);color:#fff}
+
+.cell-name{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(transparent,rgba(0,0,0,.7));
+  padding:16px 4px 4px;font-size:10px;color:#ccc;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  opacity:0;transition:opacity .15s;
+}
+.photo-cell:hover .cell-name{opacity:1}
+
+.locked-overlay{
+  position:absolute;inset:0;background:rgba(0,0,0,.7);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;font-size:11px;color:#aaa;pointer-events:none;
+}
+
+/* ── lightbox ── */
+#lightbox{
+  display:none;position:fixed;inset:0;z-index:100;
+  background:rgba(0,0,0,.95);flex-direction:column;
+  align-items:center;justify-content:center;
+}
+#lb-img{max-width:100%;max-height:calc(100vh - 100px);object-fit:contain;display:block}
+#lb-controls{
+  position:absolute;bottom:0;left:0;right:0;
+  padding:12px 20px;background:linear-gradient(transparent,rgba(0,0,0,.8));
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+#lb-filename{font-size:13px;color:#ccc;flex:1}
+#lb-mark-info{font-size:12px;padding:3px 8px;border-radius:20px;background:var(--surface2)}
+#lb-arrows{display:flex;gap:8px}
+.lb-arrow{
+  width:48px;height:48px;border-radius:50%;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:20px;color:#fff;transition:background .15s;
+  position:absolute;top:50%;transform:translateY(-50%);
+}
+.lb-arrow:hover{background:rgba(255,255,255,.2)}
+#lb-prev{left:16px}
+#lb-next{right:16px}
+#lb-close{position:absolute;top:16px;right:16px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:18px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+#lb-actions{display:flex;gap:6px}
+.lb-mark-btn{padding:6px 16px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:opacity .15s}
+#lb-flag-btn {background:var(--flag);  color:#fff}
+#lb-reject-btn{background:var(--reject);color:#fff}
+#lb-clear-btn {background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.lb-mark-btn:hover{opacity:.85}
+#lb-counter{position:absolute;top:16px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--dim)}
+#lb-spinner{display:none;position:absolute;inset:0;align-items:center;justify-content:center;pointer-events:none}
+.spinner{width:32px;height:32px;border:3px solid var(--surface2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── pro modal ── */
+#pro-modal{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.8);align-items:center;justify-content:center}
+#pro-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:min(480px,92vw)}
+#pro-box h3{margin-bottom:12px;font-size:16px}
+#pro-key-input{width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:8px;font-size:12px;font-family:monospace;resize:vertical}
+#pro-error{color:var(--reject);font-size:12px;margin-top:6px;min-height:18px}
+#pro-status{background:var(--surface2);border:1px solid var(--flag);border-radius:var(--radius);padding:8px 12px;font-size:12px;margin-bottom:12px;display:none}
+
+/* ── misc ── */
+.hidden{display:none!important}
+#pro-indicator{font-size:11px;background:#1a3000;border:1px solid var(--flag);border-radius:20px;padding:2px 8px;color:var(--flag)}
+.toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:8px 16px;font-size:13px;z-index:300;opacity:0;transition:opacity .3s;
+  pointer-events:none;
+}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <span id="logo">cullroom</span>
+  <span id="pro-indicator" class="hidden">✦ PRO</span>
+  <div id="room-wrap">
+    <span id="room-code">——————</span>
+    <button class="btn-ghost btn-sm" id="copy-link-btn" disabled>Copy link</button>
+  </div>
+  <span id="client-badge">0 clients</span>
+  <button class="btn-ghost btn-sm" id="follow-btn" title="Sync clients to your lightbox navigation">Follow me</button>
+  <div id="header-actions">
+    <button class="btn-ghost btn-sm" id="export-txt-btn" disabled>Export filenames.txt</button>
+    <button class="btn-ghost btn-sm" id="export-csv-btn" disabled>Export CSV</button>
+    <button class="btn-ghost btn-sm" id="pro-btn">Pro Key</button>
+  </div>
+</div>
+
+<div id="loading-bar"><div id="loading-fill"></div></div>
+
+<div id="restore-banner">
+  📂 Previous session found (<span id="restore-count">0</span> photos) —
+  drag the same folder to restore marks.
+  <button class="btn-ghost btn-sm" id="clear-session-btn" style="margin-left:8px">Clear</button>
+</div>
+
+<div id="status-bar">
+  <span id="status-msg">Import photos to start a session.</span>
+  <span id="mark-summary"></span>
+</div>
+
+<div id="import-wrap">
+  <div id="drop-zone">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
+      <path d="m21 15-5-5L5 21"/>
+    </svg>
+    <h2>Drop JPEG proofs here</h2>
+    <p style="margin-top:6px">or <label for="file-input">select files</label> / <label for="folder-input">select folder</label></p>
+    <p style="margin-top:10px;font-size:11px">Nothing is uploaded — photos stay on your machine</p>
+    <input type="file" id="file-input" multiple accept="image/jpeg,image/jpg,.jpg,.jpeg">
+    <input type="file" id="folder-input" multiple accept="image/jpeg,image/jpg,.jpg,.jpeg" webkitdirectory>
+  </div>
+</div>
+
+<div id="grid"></div>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <div id="lb-close" onclick="closeLightbox()">✕</div>
+  <div id="lb-counter"></div>
+  <div class="lb-arrow" id="lb-prev" onclick="lightboxStep(-1)">‹</div>
+  <img id="lb-img" src="" alt="">
+  <div id="lb-spinner"><div class="spinner"></div></div>
+  <div class="lb-arrow" id="lb-next" onclick="lightboxStep(1)">›</div>
+  <div id="lb-controls">
+    <div id="lb-filename"></div>
+    <div id="lb-mark-info"></div>
+    <div id="lb-actions">
+      <button class="lb-mark-btn" id="lb-flag-btn"   onclick="markLightbox('flag')">✓ Flag (F)</button>
+      <button class="lb-mark-btn" id="lb-reject-btn" onclick="markLightbox('reject')">✗ Reject (X)</button>
+      <button class="lb-mark-btn" id="lb-clear-btn"  onclick="markLightbox(null)">Clear (U)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pro key modal -->
+<div id="pro-modal">
+  <div id="pro-box">
+    <h3>Activate Pro License</h3>
+    <div id="pro-status"></div>
+    <p style="font-size:12px;color:var(--dim);margin-bottom:8px">Paste your cullroom-license.json content below:</p>
+    <textarea id="pro-key-input" placeholder='{"payload":"...","sig":"..."}'></textarea>
+    <div id="pro-error"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button class="btn-ghost" onclick="closeProModal()">Cancel</button>
+      <button class="btn-accent" onclick="activateProKey()">Activate</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// AIDEV-NOTE: Architecture
+// host.html is the star-topology hub. It:
+//   1. Imports JPEG files, generates 320 px thumbnails via Canvas API
+//   2. Creates a PeerJS Peer whose ID = the room code (persisted in localStorage)
+//   3. Accepts up to MAX_CLIENTS DataConnections; pushes thumbnail batches
+//      on join using a backpressure-aware loop
+//   4. Serves full 1600 px previews lazily on per-client request
+//   5. Syncs mark state (last-write-wins) to all connected clients in real time
+//   6. Persists marks + session metadata to localStorage under cr.* namespace
+//   7. Verifies Ed25519 pro-license keys via WebCrypto to unlock unlimited photos
+//      and custom studio branding on the client view
+// ═══════════════════════════════════════════════════════════════════════════════
+
+'use strict';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const VERSION          = 1;
+const FREE_TIER_LIMIT  = 50;
+const THUMB_MAX_DIM    = 320;
+const PREVIEW_MAX_DIM  = 1600;
+const THUMB_BATCH_SIZE = 20;   // AIDEV-NOTE: chunking — thumbnails sent in batches to avoid DataChannel overflow
+// AIDEV-NOTE: backpressure — sender pauses when the underlying RTCDataChannel
+// bufferedAmount exceeds BUFFER_PAUSE and resumes once it drains below
+// BUFFER_RESUME (polled every BUFFER_POLL_MS). Time-based pacing alone would
+// overflow the channel on slow links.
+const BUFFER_PAUSE   = 1024 * 1024; // 1 MB  — stop sending above this
+const BUFFER_RESUME  = 256  * 1024; // 256 KB — resume sending below this
+const BUFFER_POLL_MS = 25;
+const PREVIEW_CACHE_MAX   = 40; // host-side LRU cap for encoded previews
+const PREVIEW_INFLIGHT_MAX = 2; // concurrent preview jobs per client
+// AIDEV-NOTE: chunking — yield every YIELD_INTERVAL photos during thumbnail generation
+// to release the main thread and keep the UI responsive. Lower values increase
+// responsiveness at the cost of slightly longer total import time.
+const YIELD_INTERVAL   = 10;
+const MAX_CLIENTS      = 3;
+const RECONNECT_MS     = 3000;
+
+// AIDEV-NOTE: Ed25519 public key (SPKI DER, base64).
+// Generated by `node keygen.js --init`; the private key lives only in
+// keys/private.pem (gitignored). Replace with your own key before selling.
+// AIDEV-NOTE: security — a previous keypair was committed to git history and is
+// compromised. Never accept licenses signed by it; never re-embed its public key
+// ('MCowBQYDK2VwAyEAQN3Mg8bxnSuRehaY+RIXgoaZAWOFzze3oo40P1pnhnE=').
+const PRO_PUBKEY_B64 = 'MCowBQYDK2VwAyEAy0QdUmXJ3dbHpd/iAoIl3kU/cE/abdqgH3lHBnm++Ig=';
+// AIDEV-NOTE: warn operators if the demo public key has not been replaced
+const _DEMO_PUBKEY = 'MCowBQYDK2VwAyEAy0QdUmXJ3dbHpd/iAoIl3kU/cE/abdqgH3lHBnm++Ig=';
+if (PRO_PUBKEY_B64 === _DEMO_PUBKEY) {
+  console.warn('[cullroom] Using default demo public key. Run `node keygen.js --init` and embed your own PRO_PUBKEY_B64 before selling licenses.');
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+// AIDEV-NOTE: state sync — `marks` is the single source of truth.
+// It is written by applyMark(), persisted to cr.marks in localStorage,
+// and broadcast to all clients on every change.
+let photos      = [];   // [{id,filename,file,thumbDataUrl,locked}]
+let marks       = {};   // id → {mark:'flag'|'reject'|null, role:'host'|'client', ts:number}
+let peer        = null;
+let clients     = {};   // peerId → DataConnection
+let roomCode    = null;
+let proInfo     = null; // null | {name,studio,maxPhotos}
+let followMode  = false;
+let lbIdx       = null; // current lightbox index into photos[]
+let lbFullLoaded= new Set(); // ids for which full preview is loaded in the lightbox
+let lastLbUrl   = null; // previous lightbox object URL, revoked on navigate/close
+
+// AIDEV-NOTE: preview cache — Map iteration order gives us LRU for free:
+// get() re-inserts the entry, put() evicts the oldest key past the cap.
+// A preview is encoded once per photo, not per request per client.
+const previewCache = new Map(); // id → dataURL (LRU, capped at PREVIEW_CACHE_MAX)
+// AIDEV-NOTE: preview throttle — per-client job state. At most
+// PREVIEW_INFLIGHT_MAX jobs run per client; while at the cap only the LATEST
+// requested id is remembered (pendingId), so arrow-key skimming lands on the
+// photo the client stopped at instead of replaying every intermediate one.
+// Superseded requests are dropped silently — the client resolves preview-data by id.
+const previewJobs = new Map(); // peerId → {inFlight:number, pendingId:string|null}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+const delay = ms => new Promise(r => setTimeout(r, ms));
+const isJpeg = f => /\.(jpe?g)$/i.test(f.name) || f.type === 'image/jpeg';
+const $ = id => document.getElementById(id);
+
+// AIDEV-NOTE: XSS guard — always escape user-controlled strings before
+// inserting into innerHTML. Filenames from File objects are user-controlled.
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function showToast(msg, dur = 2500) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur);
+}
+
+function setProgress(pct) {
+  $('loading-fill').style.width = pct + '%';
+}
+
+function setStatus(msg) {
+  $('status-msg').textContent = msg;
+}
+
+function updateMarkSummary() {
+  const flags   = Object.values(marks).filter(m => m.mark === 'flag').length;
+  const rejects = Object.values(marks).filter(m => m.mark === 'reject').length;
+  const total   = photos.filter(p => !p.locked).length;
+  $('mark-summary').textContent =
+    total ? `${flags} selected · ${rejects} rejected · ${total - flags - rejects} unmarked` : '';
+}
+
+// ── Ed25519 Pro-key verification ───────────────────────────────────────────────
+// AIDEV-NOTE: License verification uses WebCrypto SubtleCrypto (Ed25519).
+// The signed payload is raw JSON bytes (UTF-8). Only the public key is embedded here.
+async function verifyLicense(jsonStr) {
+  try {
+    const { payload, sig } = JSON.parse(jsonStr);
+    const keyBytes  = Uint8Array.from(atob(PRO_PUBKEY_B64), c => c.charCodeAt(0));
+    const pubKey    = await crypto.subtle.importKey(
+      'spki', keyBytes.buffer, { name: 'Ed25519' }, false, ['verify']
+    );
+    const payBytes  = Uint8Array.from(atob(payload), c => c.charCodeAt(0));
+    const sigBytes  = Uint8Array.from(atob(sig),     c => c.charCodeAt(0));
+    const valid     = await crypto.subtle.verify({ name: 'Ed25519' }, pubKey, sigBytes, payBytes);
+    if (!valid) return null;
+    return JSON.parse(new TextDecoder().decode(payBytes));
+  } catch { return null; }
+}
+
+async function activateProKey() {
+  const raw = $('pro-key-input').value.trim();
+  $('pro-error').textContent = '';
+  const info = await verifyLicense(raw);
+  if (!info || info.plan !== 'pro') {
+    $('pro-error').textContent = 'Invalid or tampered license key.';
+    return;
+  }
+  proInfo = info;
+  localStorage.setItem('cr.proKey', raw);
+  applyProState();
+  closeProModal();
+  showToast(`Pro activated — ${info.studio}`);
+  if (photos.length) { unlockPhotos(); renderGrid(); }
+  broadcastHello();
+}
+
+function applyProState() {
+  if (!proInfo) return;
+  $('pro-indicator').classList.remove('hidden');
+  const ps = $('pro-status');
+  ps.textContent = `Active: ${proInfo.studio} (${proInfo.name}) · up to ${proInfo.maxPhotos} photos`;
+  ps.style.display = 'block';
+}
+
+function unlockPhotos() {
+  const limit = proInfo ? proInfo.maxPhotos : FREE_TIER_LIMIT;
+  photos.forEach((p, i) => { p.locked = i >= limit; });
+}
+
+// ── Thumbnail pipeline ─────────────────────────────────────────────────────────
+// AIDEV-NOTE: thumbnail pipeline — safe data-URL guard
+// thumbDataUrl is produced by canvas.toDataURL() which always returns a
+// well-formed data:image/* URL. The check below ensures any future refactor
+// that changes the source cannot accidentally inject arbitrary content.
+function isSafeDataUrl(s) {
+  return typeof s === 'string' &&
+    /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(s);
+}
+
+async function generateThumb(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(THUMB_MAX_DIM / img.naturalWidth, THUMB_MAX_DIM / img.naturalHeight, 1);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Load failed: ' + file.name)); };
+    img.src = url;
+  });
+}
+
+// AIDEV-NOTE: thumbnail pipeline — preview variant
+// Same pipeline but at PREVIEW_MAX_DIM for the client lightbox request path.
+// Host lightbox uses the original file directly (URL.createObjectURL).
+async function generatePreviewDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(PREVIEW_MAX_DIM / img.naturalWidth, PREVIEW_MAX_DIM / img.naturalHeight, 1);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Preview failed: ' + file.name)); };
+    img.src = url;
+  });
+}
+
+// ── File import ────────────────────────────────────────────────────────────────
+async function importFiles(files) {
+  const jpegs = Array.from(files).filter(isJpeg);
+  if (!jpegs.length) { showToast('No JPEG files found.'); return; }
+  jpegs.sort((a, b) => a.name.localeCompare(b.name));
+
+  // Check for session restore
+  const existing = loadSession();
+  const markMap  = loadMarks();
+  const byName   = Object.fromEntries((existing?.photos || []).map(p => [p.filename, p.id]));
+
+  $('import-wrap').classList.add('hidden');
+  $('restore-banner').style.display = 'none';
+  setProgress(0);
+  setStatus(`Importing ${jpegs.length} photos…`);
+
+  const limit = proInfo ? proInfo.maxPhotos : FREE_TIER_LIMIT;
+  const newPhotos = [];
+
+  for (let i = 0; i < jpegs.length; i++) {
+    const file = jpegs[i];
+    const savedId = byName[file.name];
+    const id      = savedId || crypto.randomUUID();
+    let thumbDataUrl;
+    try {
+      thumbDataUrl = await generateThumb(file);
+    } catch {
+      thumbDataUrl = '';
+    }
+    newPhotos.push({ id, filename: file.name, file, thumbDataUrl, locked: i >= limit });
+    setProgress(Math.round(((i + 1) / jpegs.length) * 100));
+    if (i % YIELD_INTERVAL === YIELD_INTERVAL - 1) await delay(0); // yield to keep UI responsive
+  }
+
+  photos = newPhotos;
+  previewCache.clear(); // files may have changed for restored ids
+
+  // Restore marks from localStorage (match by id)
+  marks = markMap;
+  // Remove orphan marks
+  const ids = new Set(photos.map(p => p.id));
+  for (const k of Object.keys(marks)) { if (!ids.has(k)) delete marks[k]; }
+
+  saveSession();
+  saveMarks();
+
+  setProgress(100);
+  await delay(400);
+  setProgress(0);
+
+  const freeMsg = (!proInfo && photos.length > FREE_TIER_LIMIT)
+    ? ` (${FREE_TIER_LIMIT} shown — activate Pro to unlock all)` : '';
+  setStatus(`${photos.length} photos loaded${freeMsg}`);
+
+  $('export-txt-btn').disabled = false;
+  $('export-csv-btn').disabled = false;
+
+  renderGrid();
+  updateMarkSummary();
+
+  // Push to any already-connected clients
+  for (const conn of Object.values(clients)) {
+    sendInitialState(conn);
+  }
+}
+
+async function getFilesFromDataTransfer(dt) {
+  const files = [];
+  if (dt.items) {
+    const items = Array.from(dt.items).filter(i => i.kind === 'file');
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry?.isDirectory) {
+        await traverseDirectory(entry, files);
+      } else {
+        const f = item.getAsFile();
+        if (f && isJpeg(f)) files.push(f);
+      }
+    }
+  } else {
+    Array.from(dt.files).forEach(f => { if (isJpeg(f)) files.push(f); });
+  }
+  return files;
+}
+
+async function traverseDirectory(entry, files) {
+  return new Promise(resolve => {
+    const reader = entry.createReader();
+    reader.readEntries(async entries => {
+      for (const e of entries) {
+        if (e.isFile) {
+          await new Promise(r2 => e.file(f => { if (isJpeg(f)) files.push(f); r2(); }));
+        } else if (e.isDirectory) {
+          await traverseDirectory(e, files);
+        }
+      }
+      resolve();
+    });
+  });
+}
+
+// ── PeerJS setup ───────────────────────────────────────────────────────────────
+// AIDEV-NOTE: PeerJS star topology
+// host.html creates one Peer whose ID = roomCode.
+// Clients call peer.connect(roomCode). All signaling goes through the default
+// PeerJS cloud server (0.peerjs.com). For internet sessions behind symmetric NAT
+// a self-hosted PeerJS server + TURN relay is recommended.
+function generateRoomCode() {
+  // Use a 32-char unambiguous alphabet (no 0/O/I/1 confusion) with crypto entropy.
+  // 32^6 ≈ 10^9 possible codes → collision-resistant for v1 usage.
+  const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => CHARS[b % CHARS.length]).join('');
+}
+
+function initPeer(code) {
+  roomCode = code || generateRoomCode();
+  peer = new Peer(roomCode, { debug: 0 });
+
+  peer.on('open', id => {
+    roomCode = id;
+    localStorage.setItem('cr.roomCode', roomCode);
+    $('room-code').textContent = roomCode;
+    $('copy-link-btn').disabled = false;
+    setStatus(photos.length ? `${photos.length} photos · share the link above.` : 'Import photos to start a session.');
+  });
+
+  peer.on('connection', handleIncoming);
+
+  peer.on('disconnected', () => {
+    setStatus('Signaling disconnected — reconnecting…');
+    setTimeout(() => { if (!peer.destroyed) peer.reconnect(); }, RECONNECT_MS);
+  });
+
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id') {
+      // Previous session lingering on server — try new code
+      initPeer(null);
+    } else {
+      console.warn('PeerJS error:', err.type, err.message);
+    }
+  });
+}
+
+function handleIncoming(conn) {
+  if (Object.keys(clients).length >= MAX_CLIENTS) {
+    conn.on('open', () => {
+      conn.send({ type: 'error', msg: 'Room is full (max ' + MAX_CLIENTS + ' clients).' });
+      setTimeout(() => conn.close(), 1000);
+    });
+    return;
+  }
+
+  conn.on('open', () => {
+    clients[conn.peer] = conn;
+    updateClientCount();
+    setStatus(`Client joined (${Object.keys(clients).length} connected)`);
+    if (photos.length) sendInitialState(conn);
+  });
+
+  conn.on('data', msg => handleClientMessage(conn, msg));
+
+  conn.on('close', () => {
+    delete clients[conn.peer];
+    previewJobs.delete(conn.peer);
+    updateClientCount();
+    setStatus(`Client left (${Object.keys(clients).length} connected)`);
+  });
+
+  conn.on('error', err => {
+    console.warn('Client conn error:', conn.peer, err);
+    delete clients[conn.peer];
+    previewJobs.delete(conn.peer);
+    updateClientCount();
+  });
+}
+
+function updateClientCount() {
+  const n = Object.keys(clients).length;
+  $('client-badge').textContent = n === 1 ? '1 client' : `${n} clients`;
+}
+
+// ── Initial state push ─────────────────────────────────────────────────────────
+// AIDEV-NOTE: backpressure — wait for the RTCDataChannel send buffer to drain.
+// Once bufferedAmount exceeds BUFFER_PAUSE we poll every BUFFER_POLL_MS and
+// only resume when it drops below BUFFER_RESUME (hysteresis avoids thrashing
+// right at the threshold). Returns false if the connection closed while waiting.
+async function waitForDrain(conn) {
+  if (!conn.open) return false;
+  const dc = conn.dataChannel;
+  if (!dc || dc.bufferedAmount <= BUFFER_PAUSE) return true;
+  while (conn.open && conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_RESUME) {
+    await delay(BUFFER_POLL_MS);
+  }
+  return conn.open;
+}
+
+// AIDEV-NOTE: chunking + backpressure — thumbnail batch send
+// Thumbnails are sent in THUMB_BATCH_SIZE groups. Between batches the loop
+// waits for the DataChannel bufferedAmount to drain (see waitForDrain) instead
+// of a fixed timer, so slow links throttle the push rather than overflow the
+// channel. The loop aborts if the connection closes mid-send.
+// A 320px JPEG thumb is ~15-25 KB; 300 thumbs ≈ 5–8 MB as data URLs in JSON.
+async function sendInitialState(conn) {
+  const limit   = proInfo ? proInfo.maxPhotos : FREE_TIER_LIMIT;
+  const visible = photos.slice(0, limit);
+
+  conn.send({
+    type: 'hello',
+    version: VERSION,
+    total: visible.length,
+    isFree: !proInfo,
+    studioName: proInfo?.studio || null,
+    marks: getCurrentMarks(visible),
+  });
+
+  for (let i = 0; i < visible.length; i += THUMB_BATCH_SIZE) {
+    if (!await waitForDrain(conn)) return; // client disconnected mid-send
+    const batch = visible.slice(i, i + THUMB_BATCH_SIZE).map(p => ({
+      id: p.id,
+      filename: p.filename,
+      thumb: p.thumbDataUrl,
+    }));
+    try { conn.send({ type: 'thumb-batch', batch, total: visible.length }); }
+    catch { return; } // client disconnected mid-send
+  }
+
+  if (!await waitForDrain(conn)) return;
+  conn.send({ type: 'index-ready' });
+}
+
+function broadcastHello() {
+  for (const conn of Object.values(clients)) sendInitialState(conn);
+}
+
+function getCurrentMarks(subset) {
+  const ids = new Set(subset.map(p => p.id));
+  const out = {};
+  for (const [id, m] of Object.entries(marks)) {
+    if (ids.has(id)) out[id] = m;
+  }
+  return out;
+}
+
+// ── Client message handler ─────────────────────────────────────────────────────
+function handleClientMessage(conn, msg) {
+  if (!msg || !msg.type) return;
+  switch (msg.type) {
+    case 'preview-req':
+      servePreview(conn, msg.id);
+      break;
+    case 'mark': {
+      // AIDEV-NOTE: timestamp hygiene — clamp client-supplied ts to now+2s so a
+      // skewed/malicious client clock cannot permanently outrank host marks in
+      // last-write-wins. The same normalized ts is used for applyMark AND the
+      // relay broadcast (previously the relay forwarded msg.ts verbatim, which
+      // could be undefined).
+      const ts = Math.min(Number(msg.ts) || Date.now(), Date.now() + 2000);
+      applyMark(msg.id, msg.mark, 'client', ts);
+      broadcast({ type: 'mark', id: msg.id, mark: msg.mark, role: 'client', ts }, conn.peer);
+      break;
+    }
+  }
+}
+
+// AIDEV-NOTE: lazy preview serving
+// Full-resolution previews are generated and sent ONLY when a client opens
+// the lightbox for a specific photo. This keeps the initial join fast and
+// avoids transferring photos the client never views. Encoded previews are
+// LRU-cached host-side, jobs are capped per client (latest request wins when
+// at the cap), and preview-data respects DataChannel backpressure.
+function previewCacheGet(id) {
+  if (!previewCache.has(id)) return null;
+  const data = previewCache.get(id);
+  previewCache.delete(id);
+  previewCache.set(id, data); // refresh recency
+  return data;
+}
+
+function previewCachePut(id, data) {
+  previewCache.set(id, data);
+  while (previewCache.size > PREVIEW_CACHE_MAX) {
+    previewCache.delete(previewCache.keys().next().value); // evict oldest
+  }
+}
+
+function servePreview(conn, id) {
+  let st = previewJobs.get(conn.peer);
+  if (!st) { st = { inFlight: 0, pendingId: null }; previewJobs.set(conn.peer, st); }
+
+  if (st.inFlight >= PREVIEW_INFLIGHT_MAX) {
+    st.pendingId = id; // overwrite: only the latest requested id survives
+    return;
+  }
+
+  st.inFlight++;
+  runPreviewJob(conn, id).finally(() => {
+    st.inFlight--;
+    if (st.pendingId !== null && conn.open) {
+      const next = st.pendingId;
+      st.pendingId = null;
+      servePreview(conn, next);
+    }
+  });
+}
+
+async function runPreviewJob(conn, id) {
+  const photo = photos.find(p => p.id === id);
+  if (!photo?.file) {
+    if (conn.open) conn.send({ type: 'preview-error', id, msg: 'File not available — host may need to re-import.' });
+    return;
+  }
+  try {
+    let data = previewCacheGet(id);
+    if (!data) {
+      data = await generatePreviewDataUrl(photo.file);
+      previewCachePut(id, data);
+    }
+    if (!await waitForDrain(conn)) return; // client left while buffer drained
+    conn.send({ type: 'preview-data', id, data });
+  } catch (e) {
+    if (conn.open) conn.send({ type: 'preview-error', id, msg: String(e) });
+  }
+}
+
+// ── Mark management ────────────────────────────────────────────────────────────
+// AIDEV-NOTE: state sync — last-write-wins conflict resolution.
+// Each mark carries a Unix-ms timestamp. If the incoming ts < existing ts,
+// the update is dropped. On equal ts, host role takes priority (tie-breaker).
+// Null mark removes the entry.
+function applyMark(id, mark, role, ts) {
+  const cur = marks[id];
+  if (cur) {
+    if (cur.ts > ts) return;                          // strictly older — drop
+    if (cur.ts === ts && cur.role === 'host' && role === 'client') return; // tie: host wins
+  }
+
+  if (mark === null || mark === undefined) {
+    delete marks[id];
+  } else {
+    marks[id] = { mark, role, ts };
+  }
+
+  saveMarks();
+  updateCellMark(id);
+  updateLightboxMark();
+  updateMarkSummary();
+}
+
+function broadcast(msg, excludePeerId = null) {
+  for (const [pid, conn] of Object.entries(clients)) {
+    if (pid !== excludePeerId) {
+      try { conn.send(msg); } catch { /* client disconnected */ }
+    }
+  }
+}
+
+// ── Grid rendering ─────────────────────────────────────────────────────────────
+function renderGrid() {
+  const grid = $('grid');
+  if (!photos.length) { grid.innerHTML = ''; return; }
+
+  grid.innerHTML = photos.map((p, idx) => cellHTML(p, idx)).join('');
+  grid.querySelectorAll('.photo-cell:not(.locked)').forEach(cell => {
+    cell.addEventListener('click', () => openLightbox(parseInt(cell.dataset.idx, 10)));
+    cell.addEventListener('contextmenu', e => { e.preventDefault(); contextMark(cell.dataset.id); });
+  });
+}
+
+function cellHTML(p, idx) {
+  const m   = marks[p.id];
+  const mc  = m ? m.mark : '';
+  const rc  = (m && m.role === 'client') ? ' by-client' : '';
+  const lk  = p.locked;
+  const fn  = escHtml(p.filename);
+
+  return `<div class="photo-cell${mc ? ' ' + mc : ''}${rc}${lk ? ' locked' : ''}"
+               data-id="${escHtml(p.id)}" data-idx="${idx}">
+    ${isSafeDataUrl(p.thumbDataUrl) ? `<img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">` : ''}
+    ${m ? `<div class="mark-badge">${m.mark === 'flag' ? '✓' : '✗'}</div>` : ''}
+    <div class="cell-name">${fn}</div>
+    ${lk ? `<div class="locked-overlay"><span style="font-size:20px">🔒</span><span>PRO</span></div>` : ''}
+  </div>`;
+}
+
+function updateCellMark(id) {
+  const cell = $('grid').querySelector(`.photo-cell[data-id="${id}"]`);
+  if (!cell) return;
+  const m  = marks[id];
+  const mc = m?.mark || '';
+  cell.className = 'photo-cell' + (mc ? ' ' + mc : '') + ((m?.role === 'client') ? ' by-client' : '');
+  const badge = cell.querySelector('.mark-badge');
+  if (m) {
+    if (badge) { badge.textContent = m.mark === 'flag' ? '✓' : '✗'; }
+    else {
+      const d = document.createElement('div');
+      d.className = 'mark-badge';
+      d.textContent = m.mark === 'flag' ? '✓' : '✗';
+      cell.appendChild(d);
+    }
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function contextMark(id) {
+  const cur = marks[id]?.mark;
+  const next = cur === 'flag' ? 'reject' : cur === 'reject' ? null : 'flag';
+  const ts   = Date.now();
+  applyMark(id, next, 'host', ts);
+  broadcast({ type: 'mark', id, mark: next, role: 'host', ts });
+}
+
+// ── Lightbox ───────────────────────────────────────────────────────────────────
+function openLightbox(idx) {
+  if (idx < 0 || idx >= photos.length || photos[idx].locked) return;
+  lbIdx = idx;
+  const p  = photos[idx];
+  const lb = $('lightbox');
+  lb.style.display = 'flex';
+
+  $('lb-img').src = p.thumbDataUrl;
+  $('lb-filename').textContent = p.filename;
+  // AIDEV-NOTE: counter is position among UNLOCKED photos — using the raw grid
+  // index against the unlocked total could show impossible values like "63 / 50".
+  const unlocked = photos.filter(ph => !ph.locked);
+  const pos = unlocked.findIndex(ph => ph.id === p.id) + 1;
+  $('lb-counter').textContent  = `${pos} / ${unlocked.length}`;
+  $('lb-prev').style.visibility = idx > 0 ? 'visible' : 'hidden';
+  $('lb-next').style.visibility = idx < photos.length - 1 ? 'visible' : 'hidden';
+
+  updateLightboxMark();
+
+  // Load full preview from file (host has direct file access)
+  loadLightboxFull(p);
+
+  if (followMode) broadcast({ type: 'follow', id: p.id });
+}
+
+async function loadLightboxFull(p) {
+  if (!p.file) return;
+  const spinner = $('lb-spinner');
+  spinner.style.display = 'flex';
+  const url = URL.createObjectURL(p.file);
+  try {
+    const img = $('lb-img');
+    await new Promise((res, rej) => {
+      const tmp = new Image();
+      tmp.onload = () => { img.src = url; res(); };
+      tmp.onerror = rej;
+      tmp.src = url;
+    });
+    // AIDEV-NOTE: object URL hygiene — revoke the previous lightbox URL once
+    // the new one is displayed; without this every navigation leaks a
+    // full-size blob URL for the session lifetime.
+    if (lastLbUrl && lastLbUrl !== url) URL.revokeObjectURL(lastLbUrl);
+    lastLbUrl = url;
+  } catch {
+    URL.revokeObjectURL(url); // load failed — fallback stays as thumb
+  }
+  finally { spinner.style.display = 'none'; }
+}
+
+function updateLightboxMark() {
+  if (lbIdx === null) return;
+  const p = photos[lbIdx];
+  if (!p) return;
+  const m   = marks[p.id];
+  const info = $('lb-mark-info');
+  if (m) {
+    const icon  = m.mark === 'flag' ? '✓ Flagged' : '✗ Rejected';
+    const actor = m.role === 'host' ? '📸 Photographer' : '👤 Client';
+    info.textContent = `${icon} by ${actor}`;
+    info.style.color  = m.mark === 'flag' ? 'var(--flag)' : 'var(--reject)';
+  } else {
+    info.textContent = 'Unmarked';
+    info.style.color  = 'var(--dim)';
+  }
+}
+
+function closeLightbox() {
+  lbIdx = null;
+  $('lightbox').style.display = 'none';
+  $('lb-img').src = '';
+  if (lastLbUrl) { URL.revokeObjectURL(lastLbUrl); lastLbUrl = null; }
+}
+
+function lightboxStep(dir) {
+  if (lbIdx === null) return;
+  let next = lbIdx + dir;
+  while (next >= 0 && next < photos.length && photos[next].locked) next += dir;
+  if (next >= 0 && next < photos.length && !photos[next].locked) openLightbox(next);
+}
+
+function markLightbox(mark) {
+  if (lbIdx === null) return;
+  const id = photos[lbIdx].id;
+  const ts = Date.now();
+  applyMark(id, mark, 'host', ts);
+  broadcast({ type: 'mark', id, mark, role: 'host', ts });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+function exportFilenames() {
+  const lines = photos.filter(p => !p.locked && marks[p.id]?.mark === 'flag')
+                       .map(p => p.filename);
+  if (!lines.length) { showToast('No flagged photos to export.'); return; }
+  download(lines.join('\n'), 'selects.txt', 'text/plain');
+  showToast(`Exported ${lines.length} filenames.`);
+}
+
+function exportCSV() {
+  const rows = [['filename', 'mark', 'role', 'timestamp']];
+  for (const p of photos) {
+    if (p.locked) continue;
+    const m = marks[p.id];
+    rows.push([
+      p.filename,
+      m?.mark  || 'unmarked',
+      m?.role  || '',
+      m?.ts    ? new Date(m.ts).toISOString() : '',
+    ]);
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  download(csv, 'cullroom-export.csv', 'text/csv');
+  showToast('CSV exported.');
+}
+
+function download(content, filename, mime) {
+  const a = document.createElement('a');
+  a.href     = URL.createObjectURL(new Blob([content], { type: mime }));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+// ── localStorage persistence ──────────────────────────────────────────────────
+function saveMarks()   { localStorage.setItem('cr.marks',   JSON.stringify(marks)); }
+function loadMarks()   { try { return JSON.parse(localStorage.getItem('cr.marks') || '{}'); } catch { return {}; } }
+function saveSession() { localStorage.setItem('cr.session', JSON.stringify({ id: roomCode, photos: photos.map(p => ({ id: p.id, filename: p.filename })) })); }
+function loadSession() { try { return JSON.parse(localStorage.getItem('cr.session')); }    catch { return null; } }
+
+function checkRestoreBanner() {
+  const s = loadSession();
+  if (s?.photos?.length) {
+    $('restore-count').textContent = s.photos.length;
+    $('restore-banner').style.display = 'block';
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem('cr.marks');
+  localStorage.removeItem('cr.session');
+  localStorage.removeItem('cr.roomCode');
+  marks = {};
+  photos = [];
+  roomCode = null;
+  $('restore-banner').style.display = 'none';
+  $('grid').innerHTML = '';
+  $('import-wrap').classList.remove('hidden');
+  setStatus('Session cleared.');
+  if (peer) { peer.destroy(); peer = null; }
+  initPeer(null);
+}
+
+// ── Pro modal helpers ─────────────────────────────────────────────────────────
+function openProModal()  { $('pro-modal').style.display = 'flex'; }
+function closeProModal() { $('pro-modal').style.display = 'none';  }
+
+// ── Event handlers ────────────────────────────────────────────────────────────
+const dropZone = $('drop-zone');
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()=> dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', async e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const files = await getFilesFromDataTransfer(e.dataTransfer);
+  if (files.length) importFiles(files);
+});
+
+$('file-input').addEventListener('change', e => {
+  if (e.target.files.length) importFiles(e.target.files);
+  e.target.value = '';
+});
+$('folder-input').addEventListener('change', e => {
+  if (e.target.files.length) importFiles(e.target.files);
+  e.target.value = '';
+});
+
+// Import zone also handles clicks to open file picker
+dropZone.addEventListener('click', e => {
+  if (e.target.tagName === 'LABEL' || e.target.tagName === 'INPUT') return;
+});
+
+$('copy-link-btn').addEventListener('click', () => {
+  const url = new URL(window.location.href);
+  url.pathname = url.pathname.replace(/host\.html$/, 'client.html');
+  url.searchParams.set('room', roomCode);
+  navigator.clipboard.writeText(url.href).then(() => showToast('Link copied!'));
+});
+
+$('follow-btn').addEventListener('click', () => {
+  followMode = !followMode;
+  $('follow-btn').classList.toggle('active', followMode);
+  $('follow-btn').textContent = followMode ? 'Follow me ON' : 'Follow me';
+  broadcast({ type: 'follow-mode', enabled: followMode });
+  if (followMode) showToast('Clients will follow your lightbox navigation.');
+});
+
+$('export-txt-btn').addEventListener('click', exportFilenames);
+$('export-csv-btn').addEventListener('click', exportCSV);
+$('pro-btn').addEventListener('click', openProModal);
+$('clear-session-btn').addEventListener('click', clearSession);
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if ($('lightbox').style.display === 'flex') {
+    switch (e.key) {
+      case 'ArrowRight': case 'ArrowDown':  lightboxStep(1);  break;
+      case 'ArrowLeft':  case 'ArrowUp':    lightboxStep(-1); break;
+      case 'Escape':                        closeLightbox();  break;
+      case 'f': case 'F':                   markLightbox('flag');   break;
+      case 'x': case 'X':                   markLightbox('reject'); break;
+      case 'u': case 'U':                   markLightbox(null);     break;
+    }
+    return;
+  }
+  if ($('pro-modal').style.display === 'flex' && e.key === 'Escape') closeProModal();
+});
+
+// Prevent pro modal background from closing on box click
+$('pro-box').addEventListener('click', e => e.stopPropagation());
+$('pro-modal').addEventListener('click', closeProModal);
+
+// ── Initialization ────────────────────────────────────────────────────────────
+(async function init() {
+  // Restore pro key
+  const storedKey = localStorage.getItem('cr.proKey');
+  if (storedKey) {
+    const info = await verifyLicense(storedKey);
+    if (info?.plan === 'pro') { proInfo = info; applyProState(); }
+    else localStorage.removeItem('cr.proKey');
+  }
+
+  // Show restore banner if previous session exists
+  checkRestoreBanner();
+
+  // Start PeerJS
+  const savedCode = localStorage.getItem('cr.roomCode');
+  initPeer(savedCode);
+})();
+</script>
+</body>
+</html>
