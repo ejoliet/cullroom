@@ -913,8 +913,8 @@ async function loadLightboxFull(p) {
   if (!p.file) return;
   const spinner = $('lb-spinner');
   spinner.style.display = 'flex';
+  const url = URL.createObjectURL(p.file);
   try {
-    const url = URL.createObjectURL(p.file);
     const img = $('lb-img');
     await new Promise((res, rej) => {
       const tmp = new Image();
@@ -922,7 +922,14 @@ async function loadLightboxFull(p) {
       tmp.onerror = rej;
       tmp.src = url;
     });
-  } catch { /* fallback stays as thumb */ }
+    // AIDEV-NOTE: object URL hygiene — revoke the previous lightbox URL once
+    // the new one is displayed; without this every navigation leaks a
+    // full-size blob URL for the session lifetime.
+    if (lastLbUrl && lastLbUrl !== url) URL.revokeObjectURL(lastLbUrl);
+    lastLbUrl = url;
+  } catch {
+    URL.revokeObjectURL(url); // load failed — fallback stays as thumb
+  }
   finally { spinner.style.display = 'none'; }
 }
 
@@ -947,6 +954,7 @@ function closeLightbox() {
   lbIdx = null;
   $('lightbox').style.display = 'none';
   $('lb-img').src = '';
+  if (lastLbUrl) { URL.revokeObjectURL(lastLbUrl); lastLbUrl = null; }
 }
 
 function lightboxStep(dir) {
