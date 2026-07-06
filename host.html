@@ -703,7 +703,8 @@ async function sendInitialState(conn) {
     catch { return; } // client disconnected mid-send
   }
 
-  if (conn.open) conn.send({ type: 'index-ready' });
+  if (!await waitForDrain(conn)) return;
+  conn.send({ type: 'index-ready' });
 }
 
 function broadcastHello() {

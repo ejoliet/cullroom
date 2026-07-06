@@ -173,6 +173,39 @@ warning while the demo public key is still in place.
 
 ---
 
+## Spike Test
+
+Open `spike.html` in a browser — it auto-runs and prints a PASS/FAIL summary for:
+
+1. **Thumbnail backpressure** — 300 thumbs pushed through a mock DataChannel with
+   fluctuating `bufferedAmount`; asserts no send happens while over the 1 MB
+   threshold and all 300 arrive.
+2. **Preview in-flight cap** — 50 rapid preview requests result in ≤ 2 concurrent
+   jobs, superseded requests are dropped, and the final requested id is served.
+3. **LWW timestamp clamp** — a future-dated client mark is clamped to now + 2 s
+   and loses to a genuinely newer host mark; an undefined client ts normalizes
+   to a real timestamp before relay.
+
+> **This validates logic only.** It runs against an in-memory mock channel — no
+> real network, no real WebRTC. The actual merge gate is the two-machine
+> throttled-network run below.
+
+### Manual two-machine test checklist (the real gate)
+
+1. Machine A (host): open `host.html`, drag in **300 JPEG proofs**, copy the link.
+2. Machine B (client): open Chrome DevTools → Network tab → throttling **"Slow 3G"**,
+   then open the room link.
+3. Verify the join completes: progress bar advances steadily and the full grid
+   appears (slowly is fine) — **no disconnect** during the initial push.
+4. Arrow-key skim quickly through ~20 photos in the client lightbox — the
+   preview shown must be the photo you stopped on, without replaying every
+   intermediate image.
+5. Mark photos on both sides during the transfer — marks must sync both ways.
+6. Kill the client's network for ~10 s, restore it — client reconnects with
+   backoff and receives a full resync.
+
+---
+
 ## Known Limits
 
 | Limit | Notes |

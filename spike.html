@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cullroom — Spike Test</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Courier New', monospace;
+  background: #0e0e0e;
+  color: #c9d1d9;
+  padding: 28px 24px;
+  line-height: 1.7;
+}
+h1 { color: #fff; font-size: 20px; margin-bottom: 4px; }
+.sub { font-size: 13px; color: #8b949e; margin-bottom: 20px; }
+button {
+  padding: 10px 22px;
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  margin-bottom: 20px;
+}
+button:hover { background: #2ea043; }
+button:disabled { background: #3a3a3a; cursor: not-allowed; }
+#log { font-size: 13px; white-space: pre-wrap; }
+.pass  { color: #3fb950; }
+.fail  { color: #f85149; }
+.info  { color: #8b949e; }
+.head  { color: #e3b341; }
+</style>
+</head>
+<body>
+<h1>Cullroom — Spike Test</h1>
+<p class="sub">Validates LOGIC ONLY against a MockDataChannel: thumbnail backpressure,
+per-client preview in-flight cap, and the last-write-wins timestamp clamp.
+The real merge gate is the two-machine throttled-network run documented in the README.</p>
+
+<button id="run-btn" onclick="runSpike()">▶ Run Spike</button>
+<div id="log"></div>
+
+<script>
+'use strict';
+
+// AIDEV-NOTE: constants mirror host.html so the spike proves the real primitives.
+// If host.html changes these, update them here too.
+const THUMB_BATCH_SIZE     = 20;
+const BUFFER_PAUSE         = 1024 * 1024; // 1 MB
+const BUFFER_RESUME        = 256  * 1024; // 256 KB
+const BUFFER_POLL_MS       = 25;
+const PREVIEW_INFLIGHT_MAX = 2;
+
+const N_THUMBS       = 300;
+const THUMB_BYTES    = 18 * 1024; // ~18 KB per 320px JPEG dataURL
+const N_PREVIEW_REQS = 50;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── DOM log helpers ───────────────────────────────────────────────────────────
+function log(msg, cls = 'info') {
+  const el = document.createElement('div');
+  el.className = cls;
+  el.textContent = msg;
+  document.getElementById('log').appendChild(el);
+}
+
+// ── MockDataChannel ───────────────────────────────────────────────────────────
+// AIDEV-NOTE: simulates RTCDataChannel bufferedAmount mechanics in-memory so
+// the backpressure logic can be verified without a network or PeerJS server.
+// The drain rate fluctuates each tick to mimic a congested link; every send()
+// records whether the buffer was over BUFFER_PAUSE at the moment of the call.
+class MockDataChannel {
+  constructor(receiveCallback, { minDrain, maxDrain, tickMs = 10 } = {}) {
+    this.bufferedAmount = 0;
+    this.violations     = 0;   // sends issued while bufferedAmount > BUFFER_PAUSE
+    this.maxBuffered    = 0;
+    this._q       = [];
+    this._cb      = receiveCallback;
+    this._min     = minDrain;
+    this._max     = maxDrain;
+    this._tickMs  = tickMs;
+    this._stopped = false;
+    this._run();
+  }
+
+  _run() {
+    const tick = () => {
+      if (this._stopped) return;
+      // Fluctuating drain: a random budget of bytes leaves the buffer per tick
+      let budget = this._min + Math.random() * (this._max - this._min);
+      while (this._q.length && budget > 0) {
+        const { msg, bytes } = this._q[0];
+        if (bytes > budget && this.bufferedAmount > bytes) break;
+        this._q.shift();
+        this.bufferedAmount = Math.max(0, this.bufferedAmount - bytes);
+        budget -= bytes;
+        this._cb(msg);
+      }
+      setTimeout(tick, this._tickMs);
+    };
+    setTimeout(tick, this._tickMs);
+  }
+
+  send(msg, bytes) {
+    if (this.bufferedAmount > BUFFER_PAUSE) this.violations++;
+    this.bufferedAmount += bytes;
+    this.maxBuffered = Math.max(this.maxBuffered, this.bufferedAmount);
+    this._q.push({ msg, bytes });
+  }
+
+  stop() { this._stopped = true; }
+}
+
+// Mock PeerJS DataConnection wrapping a MockDataChannel.
+function makeMockConn(receiveCallback, drainOpts) {
+  const dc = new MockDataChannel(receiveCallback, drainOpts);
+  return {
+    open: true,
+    dataChannel: dc,
+    send(msg) {
+      // Approximate the JSON serialization cost like PeerJS json mode does
+      const bytes = msg.thumb ? msg.thumb.length + 128
+                  : msg.data  ? msg.data.length + 128
+                  : msg.batch ? msg.batch.reduce((s, b) => s + b.thumb.length + 96, 128)
+                  : 128;
+      dc.send(msg, bytes);
+    },
+  };
+}
+
+// ── Production logic mirrors ──────────────────────────────────────────────────
+// AIDEV-NOTE: waitForDrain is copied from host.html — pause above BUFFER_PAUSE,
+// poll every BUFFER_POLL_MS, resume below BUFFER_RESUME, abort if conn closed.
+async function waitForDrain(conn) {
+  if (!conn.open) return false;
+  const dc = conn.dataChannel;
+  if (!dc || dc.bufferedAmount <= BUFFER_PAUSE) return true;
+  while (conn.open && conn.dataChannel && conn.dataChannel.bufferedAmount > BUFFER_RESUME) {
+    await sleep(BUFFER_POLL_MS);
+  }
+  return conn.open;
+}
+
+// Mirrors host.html sendInitialState's batch loop (thumbs only).
+async function pushThumbs(conn, thumbs) {
+  for (let i = 0; i < thumbs.length; i += THUMB_BATCH_SIZE) {
+    if (!await waitForDrain(conn)) return;
+    const batch = thumbs.slice(i, i + THUMB_BATCH_SIZE);
+    try { conn.send({ type: 'thumb-batch', batch, total: thumbs.length }); }
+    catch { return; }
+  }
+  if (!await waitForDrain(conn)) return;
+  conn.send({ type: 'index-ready' });
+}
+
+// ── TEST A: 300-thumb backpressure push ───────────────────────────────────────
+async function testThumbPush() {
+  log('── Test A: 300-thumb batch push with fluctuating bufferedAmount ──', 'head');
+
+  const thumbs = Array.from({ length: N_THUMBS }, (_, i) => ({
+    id: 'p' + i,
+    filename: `IMG_${String(i).padStart(4, '0')}.jpg`,
+    thumb: 'x'.repeat(THUMB_BYTES),
+  }));
+
+  const received = [];
+  let indexReady = false;
+  // Drain 60–400 KB per 10 ms tick — slow enough that the buffer regularly
+  // climbs toward BUFFER_PAUSE and forces the sender to wait.
+  const conn = makeMockConn(msg => {
+    if (msg.type === 'thumb-batch') received.push(...msg.batch);
+    if (msg.type === 'index-ready') indexReady = true;
+  }, { minDrain: 60 * 1024, maxDrain: 400 * 1024 });
+
+  const t0 = performance.now();
+  await pushThumbs(conn, thumbs);
+
+  // Wait for delivery to complete (timeout 20 s)
+  const deadline = Date.now() + 20000;
+  while (!indexReady && Date.now() < deadline) await sleep(30);
+  conn.dataChannel.stop();
+
+  const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+  const dc = conn.dataChannel;
+  log(`  delivered ${received.length}/${N_THUMBS} thumbs in ${elapsed}s · peak buffer ${(dc.maxBuffered / 1024).toFixed(0)} KB · sends over threshold: ${dc.violations}`);
+
+  const checks = [
+    [received.length === N_THUMBS, `all ${N_THUMBS} thumbs delivered`],
+    [indexReady, 'index-ready received after last batch'],
+    [dc.violations === 0, 'no send issued while bufferedAmount > 1 MB'],
+  ];
+  return report(checks);
+}
+
+// ── TEST B: preview in-flight cap ─────────────────────────────────────────────
+// Mirrors host.html servePreview: at most PREVIEW_INFLIGHT_MAX concurrent jobs
+// per client; while at the cap only the LATEST requested id is remembered.
+async function testPreviewCap() {
+  log('── Test B: preview in-flight cap (50 rapid requests) ──', 'head');
+
+  let inFlightNow = 0, maxConcurrent = 0, jobsRun = 0;
+  const served = [];
+  const conn = makeMockConn(msg => {
+    if (msg.type === 'preview-data') served.push(msg.id);
+  }, { minDrain: 512 * 1024, maxDrain: 1024 * 1024 });
+
+  const st = { inFlight: 0, pendingId: null };
+
+  function servePreview(id) {
+    if (st.inFlight >= PREVIEW_INFLIGHT_MAX) {
+      st.pendingId = id; // overwrite: only the latest requested id survives
+      return;
+    }
+    st.inFlight++;
+    runPreviewJob(id).finally(() => {
+      st.inFlight--;
+      if (st.pendingId !== null && conn.open) {
+        const next = st.pendingId;
+        st.pendingId = null;
+        servePreview(next);
+      }
+    });
+  }
+
+  async function runPreviewJob(id) {
+    jobsRun++;
+    inFlightNow++;
+    maxConcurrent = Math.max(maxConcurrent, inFlightNow);
+    await sleep(15 + Math.random() * 15); // simulate canvas encode
+    inFlightNow--;
+    if (!await waitForDrain(conn)) return;
+    conn.send({ type: 'preview-data', id, data: 'y'.repeat(60 * 1024) });
+  }
+
+  // 50 rapid requests, like a client arrow-key skimming through the set
+  const finalId = 'p' + (N_PREVIEW_REQS - 1);
+  for (let i = 0; i < N_PREVIEW_REQS; i++) {
+    servePreview('p' + i);
+    await sleep(1);
+  }
+
+  // Wait for queue to fully drain (timeout 10 s)
+  const deadline = Date.now() + 10000;
+  while ((st.inFlight > 0 || st.pendingId !== null) && Date.now() < deadline) await sleep(20);
+  await sleep(100); // let final preview-data flush through the mock channel
+  conn.dataChannel.stop();
+
+  log(`  jobs run: ${jobsRun}/${N_PREVIEW_REQS} requests · max concurrent: ${maxConcurrent} · last served: ${served[served.length - 1]}`);
+
+  const checks = [
+    [maxConcurrent <= PREVIEW_INFLIGHT_MAX, `max concurrent jobs ≤ ${PREVIEW_INFLIGHT_MAX} (was ${maxConcurrent})`],
+    [served.includes(finalId), `final requested id (${finalId}) was served`],
+    [jobsRun < N_PREVIEW_REQS, `superseded requests dropped (${N_PREVIEW_REQS - jobsRun} of ${N_PREVIEW_REQS} skipped)`],
+  ];
+  return report(checks);
+}
+
+// ── TEST C: last-write-wins timestamp clamp ───────────────────────────────────
+// Mirrors host.html: incoming client ts is clamped to now+2s before applyMark,
+// so a future-dated client clock cannot outrank a genuinely newer host mark.
+function testLwwClamp() {
+  log('── Test C: LWW clamp — future-dated client mark vs newer host mark ──', 'head');
+
+  const marks = {};
+  function applyMark(id, mark, role, ts) {
+    const cur = marks[id];
+    if (cur) {
+      if (cur.ts > ts) return;
+      if (cur.ts === ts && cur.role === 'host' && role === 'client') return;
+    }
+    if (mark === null || mark === undefined) delete marks[id];
+    else marks[id] = { mark, role, ts };
+  }
+
+  // Host-side normalization from handleClientMessage 'mark'
+  const clampTs = (msgTs, now) => Math.min(Number(msgTs) || now, now + 2000);
+
+  const t0 = 1_000_000_000_000; // fixed base "now" for determinism
+
+  // 1. Client mark arrives dated 10 days in the future → clamped to t0+2s
+  const clientTs = clampTs(t0 + 10 * 24 * 3600 * 1000, t0);
+  applyMark('ph1', 'flag', 'client', clientTs);
+
+  // 2. Host marks the same photo 5 s later (real time) → must win
+  applyMark('ph1', 'reject', 'host', t0 + 5000);
+
+  // 3. Relay bug regression: undefined client ts normalizes to a real number
+  const relayedTs = clampTs(undefined, t0);
+
+  log(`  client ts clamped to now+${clientTs - t0} ms · final mark: ${marks.ph1.mark} by ${marks.ph1.role}`);
+
+  const checks = [
+    [clientTs === t0 + 2000, 'future-dated client ts clamped to now + 2 s'],
+    [marks.ph1.mark === 'reject' && marks.ph1.role === 'host', 'newer host mark beats clamped client mark'],
+    [Number.isFinite(relayedTs) && relayedTs === t0, 'undefined client ts normalizes to now (relay carries a real ts)'],
+  ];
+  return report(checks);
+}
+
+// ── Runner ────────────────────────────────────────────────────────────────────
+function report(checks) {
+  let ok = true;
+  for (const [pass, desc] of checks) {
+    log(`  ${pass ? '✅' : '❌'}  ${desc}`, pass ? 'pass' : 'fail');
+    if (!pass) ok = false;
+  }
+  log('');
+  return ok;
+}
+
+async function runSpike() {
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('run-btn').disabled = true;
+
+  const t0 = performance.now();
+  const results = [];
+  results.push(await testThumbPush());
+  results.push(await testPreviewCap());
+  results.push(testLwwClamp());
+  const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
+
+  log('─────────────────────────────────────────────', 'head');
+  if (results.every(Boolean)) {
+    log(`🟢  SPIKE PASSED — ${results.length}/3 test groups OK in ${elapsed}s`, 'pass');
+  } else {
+    log(`🔴  SPIKE FAILED — ${results.filter(r => !r).length}/3 test group(s) failing, see above`, 'fail');
+  }
+  log('Reminder: this validates logic only. The merge gate is the two-machine', 'info');
+  log('throttled-network run (Chrome DevTools "Slow 3G") documented in the README.', 'info');
+
+  document.getElementById('run-btn').disabled = false;
+}
+
+// Auto-run on load so opening the file is enough to get a PASS/FAIL summary
+window.addEventListener('load', runSpike);
+</script>
+</body>
+</html>
