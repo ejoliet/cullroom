@@ -3,10 +3,15 @@
  * keygen.js — cullroom Pro License Generator
  *
  * Usage:
- *   node keygen.js "Studio Name" "Photographer Name" [maxPhotos] > cullroom-license.json
+ *   node keygen.js "<StudioName>" "<PhotographerName>" [maxPhotos] > cullroom-license.json
+ *
+ * Arguments (positional):
+ *   1. StudioName       — branding shown on the client view (e.g. "Smith Photography")
+ *   2. PhotographerName — license holder's name         (e.g. "Jane Smith")
+ *   3. maxPhotos        — optional photo cap (default: 99999)
  *
  * Example:
- *   node keygen.js "Smith Photography" "Jane Smith" 99999 > license.json
+ *   node keygen.js "Smith Photography" "Jane Smith" 99999 > cullroom-license.json
  *
  * The resulting JSON is pasted into the Pro Key input on host.html.
  *

@@ -395,10 +395,15 @@ function unlockPhotos() {
 }
 
 // ── Thumbnail pipeline ─────────────────────────────────────────────────────────
-// AIDEV-NOTE: thumbnail pipeline
-// File → HTMLImageElement (via blob URL) → Canvas (max THUMB_MAX_DIM px, preserving AR)
-// → canvas.toDataURL('image/jpeg', 0.7) → stored in photo.thumbDataUrl.
-// Processing is async/sequential to avoid exhausting GPU memory on 300-photo sessions.
+// AIDEV-NOTE: thumbnail pipeline — safe data-URL guard
+// thumbDataUrl is produced by canvas.toDataURL() which always returns a
+// well-formed data:image/* URL. The check below ensures any future refactor
+// that changes the source cannot accidentally inject arbitrary content.
+function isSafeDataUrl(s) {
+  return typeof s === 'string' &&
+    /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(s);
+}
+
 async function generateThumb(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -547,10 +552,12 @@ async function traverseDirectory(entry, files) {
 // PeerJS cloud server (0.peerjs.com). For internet sessions behind symmetric NAT
 // a self-hosted PeerJS server + TURN relay is recommended.
 function generateRoomCode() {
-  // Use crypto.getRandomValues() for sufficient entropy and collision resistance
-  const bytes = new Uint8Array(4);
+  // Use a 32-char unambiguous alphabet (no 0/O/I/1 confusion) with crypto entropy.
+  // 32^6 ≈ 10^9 possible codes → collision-resistant for v1 usage.
+  const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(6);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('').slice(0, 6).toUpperCase();
+  return Array.from(bytes, b => CHARS[b % CHARS.length]).join('');
 }
 
 function initPeer(code) {
@@ -749,7 +756,7 @@ function cellHTML(p, idx) {
 
   return `<div class="photo-cell${mc ? ' ' + mc : ''}${rc}${lk ? ' locked' : ''}"
                data-id="${escHtml(p.id)}" data-idx="${idx}">
-    <img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">
+    ${isSafeDataUrl(p.thumbDataUrl) ? `<img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">` : ''}
     ${m ? `<div class="mark-badge">${m.mark === 'flag' ? '✓' : '✗'}</div>` : ''}
     <div class="cell-name">${fn}</div>
     ${lk ? `<div class="locked-overlay"><span style="font-size:20px">🔒</span><span>PRO</span></div>` : ''}
@@ -956,7 +963,7 @@ dropZone.addEventListener('click', e => {
 
 $('copy-link-btn').addEventListener('click', () => {
   const url = new URL(window.location.href);
-  url.pathname = url.pathname.replace('host.html', 'client.html');
+  url.pathname = url.pathname.replace(/host\.html$/, 'client.html');
   url.searchParams.set('room', roomCode);
   navigator.clipboard.writeText(url.href).then(() => showToast('Link copied!'));
 });

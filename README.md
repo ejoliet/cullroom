@@ -134,7 +134,10 @@ Pro unlocks: unlimited photos, badge removed, studio name + logo on client view.
 ### Generating Licenses (Developers)
 
 ```bash
-node keygen.js "Jane Smith Photography" "Smith Studio" > cullroom-license.json
+# Arguments: "<StudioName>" "<PhotographerName>" [maxPhotos]
+#   StudioName       — branding shown on the client view
+#   PhotographerName — license holder's name
+node keygen.js "Smith Photography" "Jane Smith" 99999 > cullroom-license.json
 ```
 
 ---

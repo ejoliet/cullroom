@@ -266,6 +266,14 @@ function escHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+// AIDEV-NOTE: thumbnail pipeline — validate data URLs from the host before
+// inserting into src attributes. A malicious host could send arbitrary content;
+// accept only well-formed image data URLs to prevent XSS.
+function isSafeDataUrl(s) {
+  return typeof s === 'string' &&
+    /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(s);
+}
+
 function showToast(msg, dur = 2500) {
   const t = $('toast');
   t.textContent = msg;
@@ -507,7 +515,7 @@ function appendCell(idx) {
   cell.className      = 'photo-cell';
   cell.dataset.id     = p.id;
   cell.dataset.idx    = idx;
-  cell.innerHTML = `<img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">
+  cell.innerHTML = `${isSafeDataUrl(p.thumbDataUrl) ? `<img src="${p.thumbDataUrl}" loading="lazy" alt="${fn}">` : ''}
     <div class="cell-name">${fn}</div>`;
   cell.addEventListener('click',       () => openLightbox(idx));
   cell.addEventListener('contextmenu', e  => { e.preventDefault(); contextMark(p.id); });
@@ -624,7 +632,8 @@ $('room-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doJoin();
 });
 $('room-input').addEventListener('input', e => {
-  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // Accept A-Z and 2-9 — same alphabet used by host.html's generateRoomCode()
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z2-9]/g, '');
 });
 $('join-btn').addEventListener('click', doJoin);
 
