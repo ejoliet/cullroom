@@ -134,11 +134,37 @@ Pro unlocks: unlimited photos, badge removed, studio name + logo on client view.
 ### Generating Licenses (Developers)
 
 ```bash
-# Arguments: "<StudioName>" "<PhotographerName>" [maxPhotos]
+# One-time setup: generate the Ed25519 keypair (keys/private.pem + keys/public.pem)
+node keygen.js --init
+
+# Issue a license: --key "<StudioName>" "<PhotographerName>" [maxPhotos]
 #   StudioName       — branding shown on the client view
 #   PhotographerName — license holder's name
-node keygen.js "Smith Photography" "Jane Smith" 99999 > cullroom-license.json
+node keygen.js --key "Smith Photography" "Jane Smith" 99999 > cullroom-license.json
+
+# Verify a license against keys/public.pem
+node keygen.js --verify "$(cat cullroom-license.json)"
 ```
+
+### Rotate keys before selling
+
+The demo keypair shipped with this repo is for local testing only — anyone can
+regenerate it, so licenses signed by it are worthless. Before selling licenses:
+
+```bash
+# 1. Delete the old keys and generate your own keypair
+rm -f keys/private.pem keys/public.pem
+node keygen.js --init          # prints your PRO_PUBKEY_B64
+
+# 2. Embed the printed PRO_PUBKEY_B64 constant in host.html (replaces the demo key)
+
+# 3. Issue and sanity-check a license
+node keygen.js --key "Your Studio" "Your Name" > cullroom-license.json
+node keygen.js --verify "$(cat cullroom-license.json)"
+```
+
+`keys/private.pem` is gitignored — never commit it. host.html logs a console
+warning while the demo public key is still in place.
 
 ---
 
