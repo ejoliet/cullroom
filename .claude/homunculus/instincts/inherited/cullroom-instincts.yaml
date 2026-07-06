@@ -1,0 +1,310 @@
+# Instincts generated from https://github.com/ejoliet/cullroom
+# Generated: 2026-07-06T15:27:22.210Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: cullroom-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Commit Length
+
+## Action
+
+Write moderate-length commit messages (~77 characters)
+
+## Evidence
+
+- Average commit message length: 77 chars
+- Based on 3 commits
+
+---
+id: cullroom-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: cullroom-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: cullroom-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: cullroom-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: cullroom-workflow-multi-file-feature-update
+trigger: "when doing multi file feature update"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/ejoliet/cullroom
+---
+
+# Cullroom Workflow Multi File Feature Update
+
+## Action
+
+Follow the multi-file-feature-update workflow:
+1. Edit host.html to update UI or logic for hosts.
+2. Edit client.html to update UI or logic for clients.
+3. Edit keygen.js to update backend or cryptographic logic.
+4. Edit README.md to clarify usage or document changes.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: host.html, client.html, keygen.js
+
+---
+id: cullroom-instinct-file-naming
+trigger: "When creating or renaming a file in the codebase"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct File Naming
+
+## Action
+
+Use camelCase for file names
+
+## Evidence
+
+- Naming conventions: files = camelCase
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Function Naming
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Naming conventions: functions = camelCase
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase
+
+## Evidence
+
+- Naming conventions: classes = PascalCase
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Naming conventions: constants = SCREAMING_SNAKE_CASE
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-import-style
+trigger: "When importing modules"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Import Style
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- importStyle: relative
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-export-style
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- exportStyle: named
+- Pattern in codeStyle
+
+---
+id: cullroom-instinct-commit-format-freeform
+trigger: "When writing a commit message"
+confidence: 0.8
+domain: git
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Commit Format Freeform
+
+## Action
+
+Use a concise, freeform summary without a strict prefix, typically under 80 characters
+
+## Evidence
+
+- Commits: freeform, no prefixes, average length 77
+- Examples: 'Add cullroom: host.html, client.html, keygen.js, README.md'
+
+---
+id: cullroom-instinct-multi-file-feature-update
+trigger: "When a feature or bugfix affects both frontend, backend, and documentation"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Multi File Feature Update
+
+## Action
+
+Edit host.html, client.html, keygen.js, and README.md in a coordinated update
+
+## Evidence
+
+- Workflow: multi-file-feature-update
+- Commits updating host.html, client.html, keygen.js, README.md together
+
+---
+id: cullroom-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: ejoliet/cullroom
+---
+
+# Cullroom Instinct Test Location
+
+## Action
+
+Place tests in a separate folder from the main source code
+
+## Evidence
+
+- architecture: testLocation = separate
+
