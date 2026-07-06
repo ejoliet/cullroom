@@ -35,6 +35,11 @@ file:///path/to/cullroom/host.html
 > **HTTPS note:** PeerJS requires a secure context. For local use, `file://` works.
 > For remote clients, serve files over HTTPS (e.g., `npx serve -l 443 --ssl-cert cert.pem --ssl-key key.pem .`).
 
+> **Offline LAN:** PeerJS is vendored locally (`vendor/peerjs.min.js`) — no CDN
+> fetch, so the pages load and run on an offline LAN. (Signaling still uses the
+> PeerJS cloud server by default; self-host a PeerJS server for fully offline
+> signaling.)
+
 ---
 
 ## Controls
